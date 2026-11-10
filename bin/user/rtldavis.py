@@ -33,6 +33,7 @@ See README.md for installation and docs/configuration.md for sensor mapping.
 import math
 import queue
 import time
+import platform
 
 import weewx.drivers
 import weewx.engine
@@ -44,6 +45,7 @@ from weeutil.weeutil import tobool
 import user.rtldavis_receiver
 from user.rtldavis_gust_diagnostics import GustDiagnostics
 from user.rtldavis_frame_diagnostics import FrameDiagnostics
+from user.rtldavis_ab_diagnostics import ABDiagnostics
 
 # Use new-style weewx logging
 import weeutil.logger
@@ -521,6 +523,26 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         receiver = user.rtldavis_receiver.Receiver(
             self.frequency, [i for i in range(8) if self.transmitters & (1 << i)], self.ppm)
         self._radio = user.rtldavis_receiver.Radio(receiver, self.device, self.gain)
+        self._ab_diagnostics = None
+        self._ab_summary_seconds = None
+        self._ab_summary_next = None
+        if tobool(stn_dict.get('ab_diagnostics_enabled', False)):
+            self._ab_summary_seconds = max(1, int(stn_dict.get(
+                'ab_diagnostic_summary_seconds', 300)))
+            self._ab_summary_next = time.monotonic() + self._ab_summary_seconds
+            self._ab_diagnostics = ABDiagnostics(
+                stn_dict.get('ab_diagnostics_path', '/data/ab-diagnostics'),
+                stn_dict.get('ab_phase', 'unspecified'),
+                stn_dict.get('ab_host', platform.node()),
+                stn_dict.get('ab_dongle_id', self.device),
+                manifest={'driver_version': DRIVER_VERSION,
+                          'python_version': platform.python_version(),
+                          'device_selector': self.device,
+                          'gain': gain, 'ppm': self.ppm,
+                          'band': self.frequency,
+                          'channels': channels})
+            receiver.ab_diagnostics = self._ab_diagnostics
+            self._radio.ab_diagnostics = self._ab_diagnostics
         self._diagnostic_summary_seconds = max(1, int(stn_dict.get(
             'diagnostic_summary_seconds', 300))) if tobool(stn_dict.get(
             'diagnostic_summary_enabled', False)) else None
@@ -716,6 +738,16 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
     def hardware_name(self):
         return 'Rtldavis'
 
+    def _maybe_write_ab_summary(self):
+        if self._ab_diagnostics is None or self._ab_summary_next is None:
+            return
+        now = time.monotonic()
+        if now < self._ab_summary_next:
+            return
+        self._ab_summary_next = now + self._ab_summary_seconds
+        self._ab_diagnostics.snapshot(self._radio.receiver, self._radio,
+                                      monotonic_now=now)
+
     def _maybe_log_diagnostic_summary(self):
         if self._diagnostic_summary_next is None:
             return
@@ -758,6 +790,7 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                   % (self.tr_count, self.transm_to_store))
         while True:
             self._maybe_log_diagnostic_summary()
+            self._maybe_write_ab_summary()
             if self._radio.failure is not None:
                 raise weewx.WeeWxIOError("receiver failed: %s" % self._radio.failure)
             try:
