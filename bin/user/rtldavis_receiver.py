@@ -188,6 +188,12 @@ class Receiver:
         self._missed_channels = set()
         self._reported = set()
         self._probation = None
+        # Observational counters only; never affect frame acceptance.
+        self.diagnostic_counts = {'burst_suppressed': 0,
+                                  'burst_identical': 0,
+                                  'burst_different': 0,
+                                  'accepted': 0}
+        self._last_accepted_payload = {}
 
     def start(self, now):
         """Start listening from a new sample stream.
@@ -255,9 +261,15 @@ class Receiver:
         # A noisy burst can decode twice, even with two different CRC-valid
         # payloads. A transmitter never sends twice within 2.5 s.
         if previous is not None and now - previous < BURST_GUARD:
+            self.diagnostic_counts["burst_suppressed"] += 1
+            previous_payload = self._last_accepted_payload.get(transmitter)
+            category = ("burst_identical" if previous_payload == candidate.payload
+                        else "burst_different")
+            self.diagnostic_counts[category] += 1
             log.debug("ignoring second decode of a burst: %s", candidate.payload.hex())
             return None
         self._accepted[transmitter] = now
+        self._last_accepted_payload[transmitter] = candidate.payload
         # Another station's transmitter may be off by a different amount, and
         # its frames would keep the search from moving on.
         if transmitter not in self.index:
@@ -268,6 +280,7 @@ class Receiver:
                              frequency - self.frequencies[channel] + candidate.frequency_error)
         i = self.index[transmitter]
         self.counts[i] += 1
+        self.diagnostic_counts["accepted"] += 1
         self._missed[i] = 0
         hop = False
         if self._syncing:
