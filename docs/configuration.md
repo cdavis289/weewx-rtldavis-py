@@ -125,3 +125,24 @@ before and after the trigger, subject to the configured window and the receiver
 actually receiving those frames. The capture file is finalized after the
 post-trigger window or when the driver closes normally. A diagnostic write
 failure is logged but does not affect weather readings.
+
+
+## Optional RF frame diagnostics (experimental)
+
+```ini
+[Rtldavis]
+    frame_diagnostics_enabled = false
+```
+
+When enabled, log diagnostic-only labels for accepted frames: identical or
+changed payloads received on the same transmitter channel within 500 ms, and
+out-of-bounds decoded temperature, humidity, wind, or UV readings. The driver
+still forwards all observations unchanged. Counters are held in memory and
+accessible at `driver._frame_diagnostics.counts` for test inspection.
+
+**Scope:** This is not a direct port of Go's CRC, burst or time gates. The
+Python receiver already rejects second decodes inside its own 2.5-second
+burst guard, before the WeeWX driver sees them. Consequently these counters
+measure only frames reaching the driver, and cannot quantify pre-acceptance
+CRC failures or suppressed bursts. Do not compare these counts directly with
+Go decoder statistics. Reception percentages are unchanged.
