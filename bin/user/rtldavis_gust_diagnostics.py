@@ -44,12 +44,10 @@ class GustDiagnostics:
         cutoff = now - self.before_seconds
         while self.history and self.history[0]["timestamp"] < cutoff:
             self.history.popleft()
-        for capture in list(self.pending):
+        self.tick(now)
+        for capture in self.pending:
             if now <= capture["until"]:
                 capture["frames"].append(dict(item))
-            else:
-                self._write(capture)
-                self.pending.remove(capture)
 
     def check(self, gust_mph, average_mph=None, timestamp=None, **metadata):
         """Trigger capture for an absolute or relative gust anomaly.
@@ -68,6 +66,19 @@ class GustDiagnostics:
         if not (absolute or relative):
             return False
         now = float(self.clock() if timestamp is None else timestamp)
+        self.tick(now)
+        reasons = [reason for reason, enabled in (
+            ("absolute", absolute), ("ratio", relative)) if enabled]
+        event = {"timestamp": now, "gust_mph": gust,
+                 "average_mph": avg, "reasons": reasons,
+                 "metadata": metadata}
+        if self.pending:
+            capture = self.pending[-1]
+            capture["events"].append(event)
+            capture["until"] = max(capture["until"], now + self.after_seconds)
+            capture["reasons"] = list(dict.fromkeys(capture["reasons"] + reasons))
+            capture["gust_mph"] = max(capture["gust_mph"], gust)
+            return True
         capture = {
             "timestamp": now,
             "until": now + self.after_seconds,
@@ -76,6 +87,7 @@ class GustDiagnostics:
             "reasons": [reason for reason, enabled in (
                 ("absolute", absolute), ("ratio", relative)) if enabled],
             "metadata": metadata,
+            "events": [event],
             "frames": [dict(item) for item in self.history
                        if now - self.before_seconds <= item["timestamp"] <= now],
         }
@@ -84,6 +96,14 @@ class GustDiagnostics:
         else:
             self.pending.append(capture)
         return True
+
+    def tick(self, timestamp=None):
+        """Persist captures whose post-trigger windows have elapsed, even without frames."""
+        now = float(self.clock() if timestamp is None else timestamp)
+        for capture in list(self.pending):
+            if now > capture["until"]:
+                self._write(capture)
+                self.pending.remove(capture)
 
     def flush(self):
         """Persist pending captures, including incomplete post-trigger windows."""
