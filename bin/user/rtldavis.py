@@ -33,6 +33,7 @@ See README.md for installation and docs/configuration.md for sensor mapping.
 import math
 import queue
 import time
+import platform
 
 import weewx.drivers
 import weewx.engine
@@ -42,6 +43,9 @@ from weewx.units import obs_group_dict
 from weeutil.weeutil import tobool
 
 import user.rtldavis_receiver
+from user.rtldavis_gust_diagnostics import GustDiagnostics
+from user.rtldavis_frame_diagnostics import FrameDiagnostics
+from user.rtldavis_ab_diagnostics import ABDiagnostics
 
 # Use new-style weewx logging
 import weeutil.logger
@@ -469,6 +473,18 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         self._rain_candidate = None
         self._log_humidity_raw = tobool(stn_dict.get('log_humidity_raw', False))
         self._save_pct_good_per_transmitter = tobool(stn_dict.get('save_pct_good_per_transmitter', False))
+        self._frame_diagnostics = (FrameDiagnostics() if tobool(
+            stn_dict.get('frame_diagnostics_enabled', False)) else None)
+        self._gust_diagnostics = None
+        if tobool(stn_dict.get('gust_diagnostics_enabled', False)):
+            self._gust_diagnostics = GustDiagnostics(
+                stn_dict.get('gust_diagnostics_path', '/data/gust-diagnostics'),
+                absolute_mph=stn_dict.get('gust_absolute_threshold_mph', 50),
+                ratio=stn_dict.get('gust_ratio_threshold', 5),
+                ratio_minimum_mph=stn_dict.get('gust_ratio_minimum_mph', 25),
+                before_seconds=stn_dict.get('gust_capture_before_seconds', 300),
+                after_seconds=stn_dict.get('gust_capture_after_seconds', 60),
+                max_files=stn_dict.get('gust_diagnostics_max_files', 100))
         self._sensor_map = stn_dict.get('sensor_map', {})
         loginf('sensor map is %s' % self._sensor_map)
         self.device = str(stn_dict.get('device', '0'))
@@ -507,6 +523,31 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         receiver = user.rtldavis_receiver.Receiver(
             self.frequency, [i for i in range(8) if self.transmitters & (1 << i)], self.ppm)
         self._radio = user.rtldavis_receiver.Radio(receiver, self.device, self.gain)
+        self._ab_diagnostics = None
+        self._ab_summary_seconds = None
+        self._ab_summary_next = None
+        if tobool(stn_dict.get('ab_diagnostics_enabled', False)):
+            self._ab_summary_seconds = max(1, int(stn_dict.get(
+                'ab_diagnostic_summary_seconds', 300)))
+            self._ab_summary_next = time.monotonic() + self._ab_summary_seconds
+            self._ab_diagnostics = ABDiagnostics(
+                stn_dict.get('ab_diagnostics_path', '/data/ab-diagnostics'),
+                stn_dict.get('ab_phase', 'unspecified'),
+                stn_dict.get('ab_host', platform.node()),
+                stn_dict.get('ab_dongle_id', self.device),
+                manifest={'driver_version': DRIVER_VERSION,
+                          'python_version': platform.python_version(),
+                          'device_selector': self.device,
+                          'gain': gain, 'ppm': self.ppm,
+                          'band': self.frequency,
+                          'channels': channels})
+            receiver.ab_diagnostics = self._ab_diagnostics
+            self._radio.ab_diagnostics = self._ab_diagnostics
+        self._diagnostic_summary_seconds = max(1, int(stn_dict.get(
+            'diagnostic_summary_seconds', 300))) if tobool(stn_dict.get(
+            'diagnostic_summary_enabled', False)) else None
+        self._diagnostic_summary_next = time.monotonic() + self._diagnostic_summary_seconds if self._diagnostic_summary_seconds else None
+        self._diagnostic_summary_previous = {}
         # Set per loop by genLoopPackets; see there.
         self.transm_to_store = None
         self._radio.start()
@@ -664,14 +705,70 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                             if tr > 0 and tr < self.tr_count:
                                 # save pct_good for active transmitters (max=4)
                                 event.record[k] = self.stats['pct_good'][tr]
+        # The archive record uses the configured WeeWX unit system. Ratios are
+        # unit-independent, but absolute thresholds are expressed in mph.
+        if self._gust_diagnostics is not None:
+            try:
+                record = event.record
+                gust = record.get('windGust')
+                avg = record.get('windSpeed')
+                if gust is not None:
+                    units = record['usUnits']
+                    speed_unit, _ = weewx.units.getStandardUnitType(units, 'windGust')
+                    gust_mph = weewx.units.convert((gust, speed_unit, 'group_speed'), 'mile_per_hour')[0]
+                    avg_mph = None
+                    if avg is not None:
+                        avg_unit, _ = weewx.units.getStandardUnitType(units, 'windSpeed')
+                        avg_mph = weewx.units.convert((avg, avg_unit, 'group_speed'), 'mile_per_hour')[0]
+                    self._gust_diagnostics.check(gust_mph, avg_mph,
+                        timestamp=time.time(),
+                        archive_timestamp=record.get('dateTime'),
+                        rx_check_percent=record.get('rxCheckPercent'),
+                        source='archive')
+            except Exception:
+                log.exception('Gust diagnostics archive capture failed')
         self._reset_stats()  # save current stats in last stats
 
     def closePort(self):
+        if self._gust_diagnostics is not None:
+            self._gust_diagnostics.flush()
         self._radio.stop()
 
     @property
     def hardware_name(self):
         return 'Rtldavis'
+
+    def _maybe_write_ab_summary(self):
+        if self._ab_diagnostics is None or self._ab_summary_next is None:
+            return
+        now = time.monotonic()
+        if now < self._ab_summary_next:
+            return
+        self._ab_summary_next = now + self._ab_summary_seconds
+        self._ab_diagnostics.snapshot(self._radio.receiver, self._radio,
+                                      monotonic_now=now)
+
+    def _maybe_log_diagnostic_summary(self):
+        if self._diagnostic_summary_next is None:
+            return
+        now = time.monotonic()
+        if now < self._diagnostic_summary_next:
+            return
+        self._diagnostic_summary_next = now + self._diagnostic_summary_seconds
+        receiver = self._radio.receiver
+        sources = [('receiver', receiver.diagnostic_counts)]
+        demodulator = receiver._demodulator
+        if demodulator is not None:
+            sources.append(('demodulator', demodulator.diagnostic_counts))
+        if self._frame_diagnostics is not None:
+            sources.append(('frame', self._frame_diagnostics.counts))
+        for label, counts in sources:
+            previous = self._diagnostic_summary_previous.get(label, {})
+            delta = {key: value - previous.get(key, 0)
+                     for key, value in counts.items()}
+            self._diagnostic_summary_previous[label] = dict(counts)
+            log.info('RF diagnostics %s interval=%ds counters=%s',
+                     label, self._diagnostic_summary_seconds, delta)
 
     def genLoopPackets(self):
         """Yield observations as frames arrive. Without reception, wait.
@@ -692,11 +789,18 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         dbg_parse(1, "Number of transmitters: %s, store freqError data for transmitter with ID=%s"
                   % (self.tr_count, self.transm_to_store))
         while True:
+            self._maybe_log_diagnostic_summary()
+            self._maybe_write_ab_summary()
             if self._radio.failure is not None:
                 raise weewx.WeeWxIOError("receiver failed: %s" % self._radio.failure)
             try:
                 frame = self._radio.frames.get(timeout=1)
             except queue.Empty:
+                if self._gust_diagnostics is not None:
+                    try:
+                        self._gust_diagnostics.tick()
+                    except Exception:
+                        log.exception('Gust diagnostics idle flush failed')
                 continue
             packet = self._frame_to_packet(frame)
             if packet:
@@ -717,6 +821,28 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         counts = list(frame.counts[:4]) + [0] * (4 - len(frame.counts[:4]))
         self._update_stats(*counts)
         data = self.parse_readings(frame.payload)
+        if self._frame_diagnostics is not None:
+            try:
+                labels = self._frame_diagnostics.inspect(frame.payload, time.time(), data)
+                if labels:
+                    log.warning('RF frame diagnostic flags: %s payload=%s',
+                                ','.join(labels), frame.payload.hex())
+            except Exception:
+                log.exception('RF frame diagnostics failed')
+        if self._gust_diagnostics is not None:
+            try:
+                self._gust_diagnostics.observe(
+                    frame.payload, timestamp=time.time(),
+                    transmitter=frame.transmitter,
+                    frequency_offset=frame.frequency_offset,
+                    counts=list(frame.counts))
+                if 'wind_gust' in data:
+                    self._gust_diagnostics.check(
+                        data['wind_gust'] / MPH_TO_MPS,
+                        timestamp=time.time(), source='type9',
+                        gust_index_raw=frame.payload[5] >> 4)
+            except Exception:
+                log.exception('Gust diagnostics frame capture failed')
         if not data:
             return None
         if self.frequency == 'EU' and frame.transmitter == self.transm_to_store:

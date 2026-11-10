@@ -17,5 +17,8 @@ class RtldavisInstaller(ExtensionInstaller):
             author_email="",
             files=[('bin/user', ['bin/user/rtldavis.py',
                                  'bin/user/rtldavis_receiver.py',
-                                 'bin/user/rtldavis_dsp.py'])]
+                                 'bin/user/rtldavis_dsp.py',
+                                 'bin/user/rtldavis_gust_diagnostics.py',
+                                 'bin/user/rtldavis_frame_diagnostics.py',
+                                 'bin/user/rtldavis_ab_diagnostics.py'])]
         )

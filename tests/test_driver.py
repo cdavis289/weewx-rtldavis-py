@@ -171,3 +171,25 @@ def test_frame_counts_reach_archive_statistics(driver):
 @pytest.mark.parametrize('message', [0, 1, 0xB, 0xD, 0xF])
 def test_frame_with_impossible_message_type_is_discarded(driver, message):
     assert driver.parse_readings(frame_bytes(message=message)) == {}
+
+
+def test_gust_diagnostics_disabled_by_default(driver):
+    assert driver._gust_diagnostics is None
+
+
+def test_gust_diagnostics_preserves_weewx_packet(monkeypatch, tmp_path):
+    monkeypatch.setattr(rtldavis_receiver.Radio, 'start', lambda self: None)
+    station = rtl.RtldavisDriver(None, {'Rtldavis': {
+        'gust_diagnostics_enabled': 'true',
+        'gust_diagnostics_path': str(tmp_path),
+        'gust_capture_after_seconds': '0',
+    }})
+    raw = bytearray(frame_bytes(message=9))
+    raw[3] = 70
+    raw[5] = 0x10
+    frame = SimpleNamespace(
+        payload=bytes(raw), counts=(1, 1, 1, 1),
+        transmitter=0, channel=1, frequency_offset=0)
+    packet = station._frame_to_packet(frame)
+    assert packet['windGust'] == pytest.approx(70 * rtl.MPH_TO_MPS)
+    assert len(list(tmp_path.glob('gust-*.json'))) == 1

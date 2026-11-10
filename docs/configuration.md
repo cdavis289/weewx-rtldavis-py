@@ -95,3 +95,114 @@ Digital temperature sentinels `0xFFC` and `0xFF8`, invalid thermistor resistance
 and zero rain-tip intervals produce missing observations.
 CRC and timing checks cannot reject every plausible, isolated corrupt frame.
 Use WeeWX's `[StdQC]` for local observation ranges.
+
+
+## Optional gust-anomaly evidence capture
+
+Disabled by default. This is a diagnostic recorder, **not** a wind filter:
+all gusts continue into WeeWX unchanged. Captures contain decoded eight-byte
+Davis payloads and receiver metadata, **not** raw SDR IQ samples. The feature
+uses a bounded in-memory history and retains at most the configured number of
+JSON files. Ensure the destination directory is writable and persistent.
+
+```ini
+[Rtldavis]
+    gust_diagnostics_enabled = false
+    gust_diagnostics_path = /data/gust-diagnostics
+    gust_absolute_threshold_mph = 50
+    gust_ratio_threshold = 5
+    gust_ratio_minimum_mph = 25
+    gust_capture_before_seconds = 300
+    gust_capture_after_seconds = 60
+    gust_diagnostics_max_files = 100
+```
+
+A type-9 frame at or above the absolute threshold triggers capture immediately.
+At archive close, a high gust can also trigger capture when its ratio to the
+five-minute average wind speed exceeds the configured threshold. Relative
+checks require a positive average speed. Evidence includes frames received
+before and after the trigger, subject to the configured window and the receiver
+actually receiving those frames. The capture file is finalized after the
+post-trigger window or when the driver closes normally. A diagnostic write
+failure is logged but does not affect weather readings.
+
+
+## Optional RF frame diagnostics (experimental)
+
+```ini
+[Rtldavis]
+    frame_diagnostics_enabled = false
+```
+
+When enabled, log diagnostic-only labels for accepted frames: identical or
+changed payloads received on the same transmitter channel within 500 ms, and
+out-of-bounds decoded temperature, humidity, wind, or UV readings. The driver
+still forwards all observations unchanged. Counters are held in memory and
+accessible at `driver._frame_diagnostics.counts` for test inspection.
+
+**Scope:** This is not a direct port of Go's CRC, burst or time gates. The
+Python receiver already rejects second decodes inside its own 2.5-second
+burst guard, before the WeeWX driver sees them. Consequently these counters
+measure only frames reaching the driver, and cannot quantify pre-acceptance
+CRC failures or suppressed bursts. Do not compare these counts directly with
+Go decoder statistics. Reception percentages are unchanged.
+
+
+## Receiver burst counters (experimental)
+
+The receiver maintains in-memory `receiver.diagnostic_counts` for accepted
+frames and frames suppressed by its existing two-second burst guard. Suppressed
+frames are divided into byte-identical and different-payload categories relative
+to the last accepted frame for that transmitter. These counters do not affect
+packet delivery, reception statistics, or RF tuning. They are not yet exposed
+as WeeWX observations or periodic logs. CRC failures are not counted here:
+those are rejected earlier by the demodulator. No CRC instrumentation has been
+added yet.
+
+
+## Periodic RF diagnostic summaries
+
+```ini
+[Rtldavis]
+    diagnostic_summary_enabled = false
+    diagnostic_summary_seconds = 300
+```
+
+When enabled, the driver logs interval deltas for accepted frames, suppressed
+bursts (identical and differing payloads), demodulator CRC-valid, CRC-failed,
+and zero-payload threshold attempts, and optional frame-level flags. These are
+**threshold attempts**, not independent over-the-air frames, and cannot be
+compared directly with Go's CRC or reception counts. The original decoding,
+frame acceptance, and `rxCheckPercent` calculation remain unchanged.
+The first summary includes counts accumulated since the receiver started.
+
+## A/B crossover synchronization diagnostics (experimental)
+
+Enable only during controlled dongle-swap tests. See the
+[A/B crossover procedure](ab-crossover-test.md) and
+[development history](development-history.md).
+
+```ini
+[Rtldavis]
+    ab_diagnostics_enabled = false
+    ab_diagnostics_path = /data/ab-diagnostics/phase-a
+    ab_phase = A
+    ab_host = odysseyblue
+    ab_dongle_id = SERIAL_FROM_RTL_EEPROM
+    ab_diagnostic_summary_seconds = 300
+```
+
+With `ab_diagnostics_enabled = true`, the Python receiver writes a phase
+manifest, sparse synchronization/USB JSONL events, and cumulative-counter
+deltas to a five-minute CSV. The output directory must be persistent and
+writable by WeeWX. Use a separate directory for each run; the manifest
+is overwritten when a run starts, and CSV rows append otherwise.
+
+The receiver records consecutive missed-prediction milestones (1, 10, 25,
+50), synchronization loss after the existing `MAX_MISSED` threshold,
+frequency lock loss and reacquisition, and USB empty/dropped-block events.
+The recorder also records frequency offset, queue depth and read mode.
+The event timestamp is UTC; elapsed durations use monotonic seconds.
+
+**No tuning, packet filtering, RF hop timing, or reception calculation is
+changed.** This diagnostic feature is Python-only and disabled by default.
