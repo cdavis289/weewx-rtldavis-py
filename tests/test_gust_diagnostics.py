@@ -48,3 +48,29 @@ def test_write_failure_does_not_raise(tmp_path):
     blocked.write_text("not a directory")
     diag = GustDiagnostics(blocked, after_seconds=0)
     assert diag.check(70, timestamp=10)
+
+
+def test_overlapping_triggers_merge_and_extend(tmp_path):
+    diag = GustDiagnostics(tmp_path, before_seconds=300, after_seconds=60)
+    diag.observe(b"first", timestamp=100)
+    assert diag.check(70, timestamp=100, source="type9")
+    diag.observe(b"middle", timestamp=130)
+    assert diag.check(80, timestamp=130, source="type9")
+    diag.tick(161)
+    assert not list(tmp_path.glob("gust-*.json"))
+    diag.observe(b"last", timestamp=175)
+    diag.tick(191)
+    saved = json.loads(next(tmp_path.glob("gust-*.json")).read_text())
+    assert len(saved["events"]) == 2
+    assert saved["gust_mph"] == 80
+    assert [f["payload_hex"] for f in saved["frames"]] == [
+        b"first".hex(), b"middle".hex(), b"last".hex()]
+
+
+def test_idle_tick_finalizes_without_new_frames(tmp_path):
+    diag = GustDiagnostics(tmp_path, after_seconds=60)
+    assert diag.check(70, timestamp=100)
+    diag.tick(160)
+    assert not list(tmp_path.glob("gust-*.json"))
+    diag.tick(161)
+    assert len(list(tmp_path.glob("gust-*.json"))) == 1
