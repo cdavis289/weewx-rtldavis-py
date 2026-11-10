@@ -521,6 +521,11 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         receiver = user.rtldavis_receiver.Receiver(
             self.frequency, [i for i in range(8) if self.transmitters & (1 << i)], self.ppm)
         self._radio = user.rtldavis_receiver.Radio(receiver, self.device, self.gain)
+        self._diagnostic_summary_seconds = max(1, int(stn_dict.get(
+            'diagnostic_summary_seconds', 300))) if tobool(stn_dict.get(
+            'diagnostic_summary_enabled', False)) else None
+        self._diagnostic_summary_next = time.monotonic() + self._diagnostic_summary_seconds if self._diagnostic_summary_seconds else None
+        self._diagnostic_summary_previous = {}
         # Set per loop by genLoopPackets; see there.
         self.transm_to_store = None
         self._radio.start()
@@ -711,6 +716,28 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
     def hardware_name(self):
         return 'Rtldavis'
 
+    def _maybe_log_diagnostic_summary(self):
+        if self._diagnostic_summary_next is None:
+            return
+        now = time.monotonic()
+        if now < self._diagnostic_summary_next:
+            return
+        self._diagnostic_summary_next = now + self._diagnostic_summary_seconds
+        receiver = self._radio.receiver
+        sources = [('receiver', receiver.diagnostic_counts)]
+        demodulator = receiver._demodulator
+        if demodulator is not None:
+            sources.append(('demodulator', demodulator.diagnostic_counts))
+        if self._frame_diagnostics is not None:
+            sources.append(('frame', self._frame_diagnostics.counts))
+        for label, counts in sources:
+            previous = self._diagnostic_summary_previous.get(label, {})
+            delta = {key: value - previous.get(key, 0)
+                     for key, value in counts.items()}
+            self._diagnostic_summary_previous[label] = dict(counts)
+            log.info('RF diagnostics %s interval=%ds counters=%s',
+                     label, self._diagnostic_summary_seconds, delta)
+
     def genLoopPackets(self):
         """Yield observations as frames arrive. Without reception, wait.
 
@@ -730,6 +757,7 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         dbg_parse(1, "Number of transmitters: %s, store freqError data for transmitter with ID=%s"
                   % (self.tr_count, self.transm_to_store))
         while True:
+            self._maybe_log_diagnostic_summary()
             if self._radio.failure is not None:
                 raise weewx.WeeWxIOError("receiver failed: %s" % self._radio.failure)
             try:
