@@ -691,7 +691,8 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                         avg_unit, _ = weewx.units.getStandardUnitType(units, 'windSpeed')
                         avg_mph = weewx.units.convert((avg, avg_unit, 'group_speed'), 'mile_per_hour')[0]
                     self._gust_diagnostics.check(gust_mph, avg_mph,
-                        timestamp=record.get('dateTime'),
+                        timestamp=time.time(),
+                        archive_timestamp=record.get('dateTime'),
                         rx_check_percent=record.get('rxCheckPercent'),
                         source='archive')
             except Exception:
@@ -731,6 +732,11 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             try:
                 frame = self._radio.frames.get(timeout=1)
             except queue.Empty:
+                if self._gust_diagnostics is not None:
+                    try:
+                        self._gust_diagnostics.tick()
+                    except Exception:
+                        log.exception('Gust diagnostics idle flush failed')
                 continue
             packet = self._frame_to_packet(frame)
             if packet:
