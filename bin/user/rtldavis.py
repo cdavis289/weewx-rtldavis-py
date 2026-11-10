@@ -42,6 +42,7 @@ from weewx.units import obs_group_dict
 from weeutil.weeutil import tobool
 
 import user.rtldavis_receiver
+from user.rtldavis_gust_diagnostics import GustDiagnostics
 
 # Use new-style weewx logging
 import weeutil.logger
@@ -469,6 +470,16 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         self._rain_candidate = None
         self._log_humidity_raw = tobool(stn_dict.get('log_humidity_raw', False))
         self._save_pct_good_per_transmitter = tobool(stn_dict.get('save_pct_good_per_transmitter', False))
+        self._gust_diagnostics = None
+        if tobool(stn_dict.get('gust_diagnostics_enabled', False)):
+            self._gust_diagnostics = GustDiagnostics(
+                stn_dict.get('gust_diagnostics_path', '/data/gust-diagnostics'),
+                absolute_mph=stn_dict.get('gust_absolute_threshold_mph', 50),
+                ratio=stn_dict.get('gust_ratio_threshold', 5),
+                ratio_minimum_mph=stn_dict.get('gust_ratio_minimum_mph', 25),
+                before_seconds=stn_dict.get('gust_capture_before_seconds', 300),
+                after_seconds=stn_dict.get('gust_capture_after_seconds', 60),
+                max_files=stn_dict.get('gust_diagnostics_max_files', 100))
         self._sensor_map = stn_dict.get('sensor_map', {})
         loginf('sensor map is %s' % self._sensor_map)
         self.device = str(stn_dict.get('device', '0'))
@@ -664,9 +675,32 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                             if tr > 0 and tr < self.tr_count:
                                 # save pct_good for active transmitters (max=4)
                                 event.record[k] = self.stats['pct_good'][tr]
+        # The archive record uses the configured WeeWX unit system. Ratios are
+        # unit-independent, but absolute thresholds are expressed in mph.
+        if self._gust_diagnostics is not None:
+            try:
+                record = event.record
+                gust = record.get('windGust')
+                avg = record.get('windSpeed')
+                if gust is not None:
+                    units = record['usUnits']
+                    speed_unit, _ = weewx.units.getStandardUnitType(units, 'windGust')
+                    gust_mph = weewx.units.convert((gust, speed_unit, 'group_speed'), 'mile_per_hour')[0]
+                    avg_mph = None
+                    if avg is not None:
+                        avg_unit, _ = weewx.units.getStandardUnitType(units, 'windSpeed')
+                        avg_mph = weewx.units.convert((avg, avg_unit, 'group_speed'), 'mile_per_hour')[0]
+                    self._gust_diagnostics.check(gust_mph, avg_mph,
+                        timestamp=record.get('dateTime'),
+                        rx_check_percent=record.get('rxCheckPercent'),
+                        source='archive')
+            except Exception:
+                log.exception('Gust diagnostics archive capture failed')
         self._reset_stats()  # save current stats in last stats
 
     def closePort(self):
+        if self._gust_diagnostics is not None:
+            self._gust_diagnostics.flush()
         self._radio.stop()
 
     @property
@@ -717,6 +751,20 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         counts = list(frame.counts[:4]) + [0] * (4 - len(frame.counts[:4]))
         self._update_stats(*counts)
         data = self.parse_readings(frame.payload)
+        if self._gust_diagnostics is not None:
+            try:
+                self._gust_diagnostics.observe(
+                    frame.payload, timestamp=time.time(),
+                    transmitter=frame.transmitter,
+                    frequency_offset=frame.frequency_offset,
+                    counts=list(frame.counts))
+                if 'wind_gust' in data:
+                    self._gust_diagnostics.check(
+                        data['wind_gust'] / MPH_TO_MPS,
+                        timestamp=time.time(), source='type9',
+                        gust_index_raw=frame.payload[5] >> 4)
+            except Exception:
+                log.exception('Gust diagnostics frame capture failed')
         if not data:
             return None
         if self.frequency == 'EU' and frame.transmitter == self.transm_to_store:
