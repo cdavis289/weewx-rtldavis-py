@@ -95,3 +95,33 @@ Digital temperature sentinels `0xFFC` and `0xFF8`, invalid thermistor resistance
 and zero rain-tip intervals produce missing observations.
 CRC and timing checks cannot reject every plausible, isolated corrupt frame.
 Use WeeWX's `[StdQC]` for local observation ranges.
+
+
+## Optional gust-anomaly evidence capture
+
+Disabled by default. This is a diagnostic recorder, **not** a wind filter:
+all gusts continue into WeeWX unchanged. Captures contain decoded eight-byte
+Davis payloads and receiver metadata, **not** raw SDR IQ samples. The feature
+uses a bounded in-memory history and retains at most the configured number of
+JSON files. Ensure the destination directory is writable and persistent.
+
+```ini
+[Rtldavis]
+    gust_diagnostics_enabled = false
+    gust_diagnostics_path = /data/gust-diagnostics
+    gust_absolute_threshold_mph = 50
+    gust_ratio_threshold = 5
+    gust_ratio_minimum_mph = 25
+    gust_capture_before_seconds = 300
+    gust_capture_after_seconds = 60
+    gust_diagnostics_max_files = 100
+```
+
+A type-9 frame at or above the absolute threshold triggers capture immediately.
+At archive close, a high gust can also trigger capture when its ratio to the
+five-minute average wind speed exceeds the configured threshold. Relative
+checks require a positive average speed. Evidence includes frames received
+before and after the trigger, subject to the configured window and the receiver
+actually receiving those frames. The capture file is finalized after the
+post-trigger window or when the driver closes normally. A diagnostic write
+failure is logged but does not affect weather readings.
