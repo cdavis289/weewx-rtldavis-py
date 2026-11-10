@@ -158,3 +158,20 @@ packet delivery, reception statistics, or RF tuning. They are not yet exposed
 as WeeWX observations or periodic logs. CRC failures are not counted here:
 those are rejected earlier by the demodulator. No CRC instrumentation has been
 added yet.
+
+
+## Periodic RF diagnostic summaries
+
+```ini
+[Rtldavis]
+    diagnostic_summary_enabled = false
+    diagnostic_summary_seconds = 300
+```
+
+When enabled, the driver logs interval deltas for accepted frames, suppressed
+bursts (identical and differing payloads), demodulator CRC-valid, CRC-failed,
+and zero-payload threshold attempts, and optional frame-level flags. These are
+**threshold attempts**, not independent over-the-air frames, and cannot be
+compared directly with Go's CRC or reception counts. The original decoding,
+frame acceptance, and `rxCheckPercent` calculation remain unchanged.
+The first summary includes counts accumulated since the receiver started.
