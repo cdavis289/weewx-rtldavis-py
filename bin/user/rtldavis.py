@@ -43,6 +43,7 @@ from weeutil.weeutil import tobool
 
 import user.rtldavis_receiver
 from user.rtldavis_gust_diagnostics import GustDiagnostics
+from user.rtldavis_frame_diagnostics import FrameDiagnostics
 
 # Use new-style weewx logging
 import weeutil.logger
@@ -470,6 +471,8 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         self._rain_candidate = None
         self._log_humidity_raw = tobool(stn_dict.get('log_humidity_raw', False))
         self._save_pct_good_per_transmitter = tobool(stn_dict.get('save_pct_good_per_transmitter', False))
+        self._frame_diagnostics = (FrameDiagnostics() if tobool(
+            stn_dict.get('frame_diagnostics_enabled', False)) else None)
         self._gust_diagnostics = None
         if tobool(stn_dict.get('gust_diagnostics_enabled', False)):
             self._gust_diagnostics = GustDiagnostics(
@@ -757,6 +760,14 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         counts = list(frame.counts[:4]) + [0] * (4 - len(frame.counts[:4]))
         self._update_stats(*counts)
         data = self.parse_readings(frame.payload)
+        if self._frame_diagnostics is not None:
+            try:
+                labels = self._frame_diagnostics.inspect(frame.payload, time.time(), data)
+                if labels:
+                    log.warning('RF frame diagnostic flags: %s payload=%s',
+                                ','.join(labels), frame.payload.hex())
+            except Exception:
+                log.exception('RF frame diagnostics failed')
         if self._gust_diagnostics is not None:
             try:
                 self._gust_diagnostics.observe(
