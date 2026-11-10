@@ -146,3 +146,15 @@ burst guard, before the WeeWX driver sees them. Consequently these counters
 measure only frames reaching the driver, and cannot quantify pre-acceptance
 CRC failures or suppressed bursts. Do not compare these counts directly with
 Go decoder statistics. Reception percentages are unchanged.
+
+
+## Receiver burst counters (experimental)
+
+The receiver maintains in-memory `receiver.diagnostic_counts` for accepted
+frames and frames suppressed by its existing two-second burst guard. Suppressed
+frames are divided into byte-identical and different-payload categories relative
+to the last accepted frame for that transmitter. These counters do not affect
+packet delivery, reception statistics, or RF tuning. They are not yet exposed
+as WeeWX observations or periodic logs. CRC failures are not counted here:
+those are rejected earlier by the demodulator. No CRC instrumentation has been
+added yet.
