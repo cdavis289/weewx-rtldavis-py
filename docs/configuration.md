@@ -97,6 +97,20 @@ CRC and timing checks cannot reject every plausible, isolated corrupt frame.
 Use WeeWX's `[StdQC]` for local observation ranges.
 
 
+## Optional wind validation history (experimental)
+
+Disabled by default. This feature records rolling decoded wind-speed maxima and the latest type-9 gust from the configured wind transmitter. It does not filter observations, change LOOP packets, or modify archive records.
+
+Configuration:
+
+    [Rtldavis]
+        wind_validation_enabled = false
+        wind_validation_summary_seconds = 60
+
+When enabled, the driver logs a summary every 60 seconds by default, including receiver five- and ten-minute maxima, transmitter-reported gust, report age, freshness, and sample counts.
+
+The internal field name issWindGust10 refers to the configured wind transmitter, which may be a separate anemometer rather than the ISS. The transmitter reporting window and receiver rolling window may not align. Missing RF frames can also make receiver maxima incomplete. These comparisons are diagnostic only.
+
 ## Optional gust-anomaly evidence capture
 
 Disabled by default. This is a diagnostic recorder, **not** a wind filter:

@@ -20,5 +20,6 @@ class RtldavisInstaller(ExtensionInstaller):
                                  'bin/user/rtldavis_dsp.py',
                                  'bin/user/rtldavis_gust_diagnostics.py',
                                  'bin/user/rtldavis_frame_diagnostics.py',
-                                 'bin/user/rtldavis_ab_diagnostics.py'])]
+                                 'bin/user/rtldavis_ab_diagnostics.py',
+                                 'bin/user/rtldavis_wind_validation.py'])]
         )

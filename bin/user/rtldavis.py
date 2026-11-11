@@ -481,6 +481,8 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                 stn_dict.get('wind_validation_enabled', False))
             else None
         )
+        self._wind_summary_seconds = max(1, int(stn_dict.get("wind_validation_summary_seconds", 60))) if self._wind_history is not None else None
+        self._wind_summary_next = time.monotonic() + self._wind_summary_seconds if self._wind_summary_seconds is not None else None
         self._gust_diagnostics = None
         if tobool(stn_dict.get('gust_diagnostics_enabled', False)):
             self._gust_diagnostics = GustDiagnostics(
@@ -744,6 +746,19 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
     def hardware_name(self):
         return 'Rtldavis'
 
+    def _maybe_log_wind_summary(self):
+        if self._wind_history is None or self._wind_summary_next is None:
+            return
+        now = time.monotonic()
+        if now < self._wind_summary_next:
+            return
+        self._wind_summary_next = now + self._wind_summary_seconds
+        try:
+            summary = self._wind_history.snapshot(now)
+            log.info("Wind validation rx5=%s mph rx10=%s mph tx10=%s mph tx_age=%s s tx_fresh=%s samples5=%d samples10=%d span=%.1f s", summary["rxWindGust5"], summary["rxWindGust10"], summary["issWindGust10"], summary["issAgeSeconds"], summary["issFresh"], summary["rxSampleCount5"], summary["rxSampleCount10"], summary["rxHistorySpanSeconds"])
+        except Exception:
+            log.exception("Wind validation summary failed")
+
     def _maybe_write_ab_summary(self):
         if self._ab_diagnostics is None or self._ab_summary_next is None:
             return
@@ -796,6 +811,7 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                   % (self.tr_count, self.transm_to_store))
         while True:
             self._maybe_log_diagnostic_summary()
+            self._maybe_log_wind_summary()
             self._maybe_write_ab_summary()
             if self._radio.failure is not None:
                 raise weewx.WeeWxIOError("receiver failed: %s" % self._radio.failure)
