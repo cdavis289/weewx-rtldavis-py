@@ -46,6 +46,7 @@ import user.rtldavis_receiver
 from user.rtldavis_gust_diagnostics import GustDiagnostics
 from user.rtldavis_frame_diagnostics import FrameDiagnostics
 from user.rtldavis_ab_diagnostics import ABDiagnostics
+from user.rtldavis_wind_validation import WindHistory
 
 # Use new-style weewx logging
 import weeutil.logger
@@ -475,6 +476,11 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         self._save_pct_good_per_transmitter = tobool(stn_dict.get('save_pct_good_per_transmitter', False))
         self._frame_diagnostics = (FrameDiagnostics() if tobool(
             stn_dict.get('frame_diagnostics_enabled', False)) else None)
+        self._wind_history = (
+            WindHistory() if tobool(
+                stn_dict.get('wind_validation_enabled', False))
+            else None
+        )
         self._gust_diagnostics = None
         if tobool(stn_dict.get('gust_diagnostics_enabled', False)):
             self._gust_diagnostics = GustDiagnostics(
@@ -821,6 +827,19 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         counts = list(frame.counts[:4]) + [0] * (4 - len(frame.counts[:4]))
         self._update_stats(*counts)
         data = self.parse_readings(frame.payload)
+        if self._wind_history is not None:
+            try:
+                frame_time = getattr(frame, 'time', None)
+                if frame_time is None:
+                    frame_time = time.monotonic()
+                if 'wind_speed' in data:
+                    self._wind_history.observe_wind(
+                        data['wind_speed'] / MPH_TO_MPS, frame_time)
+                if 'wind_gust' in data:
+                    self._wind_history.observe_iss(
+                        data['wind_gust'] / MPH_TO_MPS, frame_time)
+            except Exception:
+                log.exception('Wind validation history update failed')
         if self._frame_diagnostics is not None:
             try:
                 labels = self._frame_diagnostics.inspect(frame.payload, time.time(), data)
