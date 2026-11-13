@@ -238,7 +238,20 @@ class Receiver:
         if not self._tunings or self._tunings[-1][1:] != (self.channel, self.frequency):
             self._tunings.append((self._demodulator.sample_count, self.channel, self.frequency))
             del self._tunings[:-8]
+        phase_c = self.phase_c_diagnostics
+        if phase_c is not None:
+            before_crc = dict(self._demodulator.diagnostic_counts)
         candidates = self._demodulator.feed(raw, self.shifts)
+        if phase_c is not None:
+            after_crc = self._demodulator.diagnostic_counts
+            phase_c.observe(
+                "demod_candidates", timestamp=end_time,
+                candidate_bursts=len(candidates),
+                crc_failed_attempts=after_crc.get("crc_failed_attempts", 0) - before_crc.get("crc_failed_attempts", 0),
+                crc_valid_attempts=after_crc.get("crc_valid_attempts", 0) - before_crc.get("crc_valid_attempts", 0),
+                zero_payload_attempts=after_crc.get("zero_payload_attempts", 0) - before_crc.get("zero_payload_attempts", 0),
+                wide_search=len(self.shifts) > 1,
+                syncing=self._syncing, locked=self.locked)
         end_index = self._demodulator.sample_count
         frames = []
         for candidate in candidates:
@@ -276,6 +289,12 @@ class Receiver:
             category = ("burst_identical" if previous_payload == candidate.payload
                         else "burst_different")
             self.diagnostic_counts[category] += 1
+            if self.phase_c_diagnostics is not None:
+                self.phase_c_diagnostics.observe(
+                    "candidate_rejected", timestamp=now,
+                    reason=category, transmitter=transmitter + 1,
+                    rf_channel=channel, tuned_frequency_hz=frequency,
+                    frequency_error_hz=candidate.frequency_error)
             log.debug("ignoring second decode of a burst: %s", candidate.payload.hex())
             return None
         self._accepted[transmitter] = now
@@ -283,6 +302,13 @@ class Receiver:
         # Another station's transmitter may be off by a different amount, and
         # its frames would keep the search from moving on.
         if transmitter not in self.index:
+            if self.phase_c_diagnostics is not None:
+                self.phase_c_diagnostics.observe(
+                    "candidate_rejected", timestamp=now,
+                    reason="unconfigured_transmitter",
+                    transmitter=transmitter + 1, rf_channel=channel,
+                    tuned_frequency_hz=frequency,
+                    frequency_error_hz=candidate.frequency_error)
             self._report_unconfigured(transmitter)
             return None
         self._heard = True
@@ -291,6 +317,16 @@ class Receiver:
         i = self.index[transmitter]
         self.counts[i] += 1
         self.diagnostic_counts["accepted"] += 1
+        if self.phase_c_diagnostics is not None:
+            self.phase_c_diagnostics.observe(
+                "candidate_accepted", timestamp=now,
+                transmitter=transmitter + 1, rf_channel=channel,
+                tuned_frequency_hz=frequency,
+                frequency_error_hz=candidate.frequency_error,
+                measured_offset_hz=(frequency - self.frequencies[channel]
+                                    + candidate.frequency_error),
+                learned_offset_hz=offset, global_offset_hz=self.offset,
+                syncing=self._syncing, locked=self.locked)
         self._ab_last_frame = now
         self._missed[i] = 0
         hop = False
