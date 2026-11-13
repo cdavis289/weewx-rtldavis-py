@@ -195,6 +195,8 @@ class Receiver:
                                   'accepted': 0}
         self._last_accepted_payload = {}
         self.ab_diagnostics = None
+        self.phase_c_diagnostics = None
+        self._phase_c_expected_visit = None
         self._ab_last_frame = None
         self._ab_sync_started = None
         self._ab_loss_started = None
@@ -441,6 +443,18 @@ class Receiver:
         self._next = i
         self._tune(hop, transmitter)
         self._deadline = visit + RECEIVE_WINDOW
+        if self.phase_c_diagnostics is not None:
+            self._phase_c_expected_visit = visit
+            self.phase_c_diagnostics.observe(
+                "hop_scheduled", timestamp=now,
+                transmitter=transmitter + 1,
+                rf_channel=self.channel,
+                target_frequency_hz=self.frequency,
+                expected_visit_monotonic=visit,
+                deadline_monotonic=self._deadline,
+                seconds_until_visit=visit - now,
+                wide_search=len(self.shifts) > 1,
+                frequency_offset_hz=self.frequency - self.frequencies[self.channel])
         log.debug("expecting channel %d in %.2f s on %d Hz", transmitter + 1,
                   visit - now, self.frequency)
 
@@ -840,7 +854,12 @@ class Radio(threading.Thread):
             dongle.configure(self.gain)
             self.receiver.start(time.monotonic())
             tuned = self.receiver.frequency
-            dongle.tune(tuned)
+            if self.receiver.phase_c_diagnostics is None:
+                dongle.tune(tuned)
+            else:
+                from user.rtldavis_phase_c_diagnostics import observe_hardware_tune
+                observe_hardware_tune(self.receiver.phase_c_diagnostics, dongle.tune,
+                                      tuned, self.receiver, reason="initial")
             stream_started = False
             while True:
                 if stream_started and self.ab_diagnostics is not None:
@@ -865,7 +884,13 @@ class Radio(threading.Thread):
                         if self.receiver.frequency != tuned:
                             tuned = self.receiver.frequency
                             try:
-                                dongle.tune(tuned)
+                                if self.receiver.phase_c_diagnostics is None:
+                                    dongle.tune(tuned)
+                                else:
+                                    from user.rtldavis_phase_c_diagnostics import observe_hardware_tune
+                                    observe_hardware_tune(
+                                        self.receiver.phase_c_diagnostics, dongle.tune,
+                                        tuned, self.receiver, reason="hop")
                             except OSError as e:
                                 if self.ab_diagnostics is not None:
                                     self.ab_counters['usb_tune_errors'] += 1

@@ -71,3 +71,31 @@ class PhaseCDiagnostics:
             result = list(self._pending)
             self._pending.clear()
         return result
+
+
+def observe_hardware_tune(diagnostics, tune, frequency, receiver,
+                          reason="hop", clock=None):
+    """Time a real hardware tune; preserve its result and any exception.
+
+    Called only when Phase C is enabled. The diagnostic event is in-memory.
+    """
+    timer = clock or time.monotonic
+    started = timer()
+    error = None
+    try:
+        return tune(frequency)
+    except BaseException as exc:
+        error = type(exc).__name__
+        raise
+    finally:
+        finished = timer()
+        expected = getattr(receiver, "_phase_c_expected_visit", None)
+        diagnostics.observe(
+            "hardware_tune", timestamp=finished, reason=reason,
+            target_frequency_hz=frequency,
+            rf_channel=getattr(receiver, "channel", None),
+            tune_duration_ms=round((finished - started) * 1000, 3),
+            expected_visit_monotonic=expected,
+            tune_complete_lead_ms=(round((expected - finished) * 1000, 3)
+                                   if expected is not None else None),
+            error=error)
