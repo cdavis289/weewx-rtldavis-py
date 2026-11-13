@@ -533,6 +533,7 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         self._radio = user.rtldavis_receiver.Radio(receiver, self.device, self.gain)
         self._phase_c_diagnostics = None
         self._phase_c_path = None
+        self._phase_c_max_files = 100
         if tobool(stn_dict.get("phase_c_diagnostics_enabled", False)):
             from user.rtldavis_phase_c_diagnostics import PhaseCDiagnostics
             self._phase_c_diagnostics = PhaseCDiagnostics(
@@ -542,6 +543,8 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                 max_pending=int(stn_dict.get("phase_c_max_pending", 8)))
             self._phase_c_path = stn_dict.get(
                 "phase_c_diagnostics_path", "/data/phase-c-diagnostics")
+            self._phase_c_max_files = max(1, int(stn_dict.get(
+                "phase_c_max_files", 100)))
             receiver.phase_c_diagnostics = self._phase_c_diagnostics
         self._ab_diagnostics = None
         self._ab_summary_seconds = None
@@ -810,7 +813,8 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         try:
             from user.rtldavis_phase_c_diagnostics import persist_captures
             for path in persist_captures(self._phase_c_diagnostics,
-                                         self._phase_c_path):
+                                         self._phase_c_path,
+                                         max_files=self._phase_c_max_files):
                 log.info("Phase C capture saved: %s", path)
         except Exception:
             log.exception("Phase C capture persistence failed")

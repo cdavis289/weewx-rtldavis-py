@@ -67,6 +67,26 @@ class PhaseCDiagnostics:
             }
             return True
 
+    def peek_pending(self, timestamp=None):
+        """Return the oldest completed capture without removing it.
+
+        Persistence happens without holding the producer's lock.
+        """
+        now = self.clock() if timestamp is None else float(timestamp)
+        with self._lock:
+            if self._active is not None and now >= self._active["end_monotonic"]:
+                self._queue_completed()
+            return self._pending[0] if self._pending else None
+
+    def acknowledge(self, capture):
+        """Remove a successfully saved capture, if it is still queued."""
+        with self._lock:
+            for index, pending in enumerate(self._pending):
+                if pending is capture:
+                    del self._pending[index]
+                    return True
+        return False
+
     def drain(self, timestamp=None):
         """Return completed captures to the consumer; never perform file I/O."""
         now = self.clock() if timestamp is None else float(timestamp)
@@ -133,29 +153,58 @@ def observe_sample_processing(diagnostics, feed, data, arrival,
             error=error)
 
 
-def persist_captures(diagnostics, directory, timestamp=None):
-    """Drain and persist completed captures from the WeeWX consumer thread.
+def persist_captures(diagnostics, directory, timestamp=None, max_files=100):
+    """Persist queued captures on the WeeWX loop thread, then acknowledge.
 
-    Uses exclusive creation to avoid overwriting an existing capture. The
-    caller should catch I/O exceptions and log them; this helper never runs
-    in the radio processing thread.
+    Failed writes remain queued for retry. Producer never performs disk I/O.
+    Retention only touches files with the exact Phase C capture filename shape.
     """
     import json
-    from pathlib import Path
+    import os
+    import re
+    import tempfile
     import uuid
+    from pathlib import Path
 
-    captures = diagnostics.drain(timestamp=timestamp)
-    if not captures:
-        return []
+    limit = max(1, int(max_files))
     destination = Path(directory)
-    destination.mkdir(parents=True, exist_ok=True)
     paths = []
-    for capture in captures:
-        name = 'phase-c-%s-%s.json' % (time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()),
-                                       uuid.uuid4().hex[:12])
-        path = destination / name
-        with path.open('x', encoding='utf-8') as output:
-            json.dump(capture, output, sort_keys=True, indent=2, allow_nan=False)
-            output.write('\n')
-        paths.append(path)
+    first = True
+    while True:
+        capture = diagnostics.peek_pending(timestamp=timestamp if first else None)
+        first = False
+        if capture is None:
+            break
+        destination.mkdir(parents=True, exist_ok=True)
+        name = 'phase-c-%s-%s.json' % (
+            time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()), uuid.uuid4().hex)
+        target = destination / name
+        temp_name = None
+        try:
+            fd, temp_name = tempfile.mkstemp(prefix='.phase-c-', suffix='.tmp',
+                                              dir=str(destination))
+            with os.fdopen(fd, 'w', encoding='utf-8') as output:
+                json.dump(capture, output, sort_keys=True, indent=2, allow_nan=False)
+                output.write('\n')
+                output.flush()
+                os.fsync(output.fileno())
+            os.replace(temp_name, target)
+            temp_name = None
+        finally:
+            if temp_name is not None:
+                try:
+                    os.unlink(temp_name)
+                except FileNotFoundError:
+                    pass
+        diagnostics.acknowledge(capture)
+        paths.append(target)
+
+    # Prune only after successful writes. Never touch other JSON or temp files.
+    if paths:
+        pattern = re.compile(r'^phase-c-\d{8}T\d{6}Z-[0-9a-f]{12,32}\.json$')
+        candidates = sorted(
+            (p for p in destination.iterdir() if p.is_file() and pattern.fullmatch(p.name)),
+            key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
+        for old in candidates[limit:]:
+            old.unlink()
     return paths
