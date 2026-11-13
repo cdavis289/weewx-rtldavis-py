@@ -511,6 +511,10 @@ class Receiver:
                             empty_periods=self._empty_periods,
                             frequency_offset_hz=round(self.offset, 1))
                     self.diagnostic_counts['sync_losses'] += 1
+                    if self.phase_c_diagnostics is not None:
+                        self.phase_c_diagnostics.trigger(
+                            'frequency_lock_lost', empty_periods=self._empty_periods,
+                            frequency_offset_hz=round(self.offset, 1))
                     self._ab_loss_started = now
                     self._ab_sync_reason = 'frequency_lock_lost'
                     self.locked = False
@@ -526,6 +530,12 @@ class Receiver:
         self._last_hop[i] = (self._last_hop[i] + 1) % len(self.pattern)
         self._missed[i] += 1
         self.diagnostic_counts['missed_predictions'] += 1
+        if self.phase_c_diagnostics is not None and self._missed[i] in (10, 25, 50):
+            self.phase_c_diagnostics.observe(
+                "missed_frame_streak", transmitter=transmitter + 1,
+                missed_frames=self._missed[i],
+                expected_channel=self._expected[1],
+                tuned_frequency_hz=self.frequency)
         if self.ab_diagnostics is not None and self._missed[i] in (1, 10, 25, 50):
             self.ab_diagnostics.event('missed_frame_streak',
                 transmitter=transmitter + 1, missed_frames=self._missed[i],
@@ -541,6 +551,12 @@ class Receiver:
             self.diagnostic_counts["sync_losses"] += 1
             self._ab_loss_started = now
             self._ab_sync_reason = "consecutive_missed_frames"
+            if self.phase_c_diagnostics is not None:
+                self.phase_c_diagnostics.trigger(
+                    "consecutive_missed_frames", transmitter=transmitter + 1,
+                    missed_frames=self._missed[i],
+                    tuned_frequency_hz=self.frequency,
+                    frequency_offset_hz=round(self.offset, 1))
             if self.ab_diagnostics is not None:
                 self.ab_diagnostics.event("synchronization_lost",
                     transmitter=transmitter + 1, missed_frames=self._missed[i],

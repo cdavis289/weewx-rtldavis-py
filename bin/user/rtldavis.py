@@ -531,6 +531,18 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         receiver = user.rtldavis_receiver.Receiver(
             self.frequency, [i for i in range(8) if self.transmitters & (1 << i)], self.ppm)
         self._radio = user.rtldavis_receiver.Radio(receiver, self.device, self.gain)
+        self._phase_c_diagnostics = None
+        self._phase_c_path = None
+        if tobool(stn_dict.get("phase_c_diagnostics_enabled", False)):
+            from user.rtldavis_phase_c_diagnostics import PhaseCDiagnostics
+            self._phase_c_diagnostics = PhaseCDiagnostics(
+                before_seconds=float(stn_dict.get("phase_c_before_seconds", 60)),
+                after_seconds=float(stn_dict.get("phase_c_after_seconds", 60)),
+                max_events=int(stn_dict.get("phase_c_max_events", 4096)),
+                max_pending=int(stn_dict.get("phase_c_max_pending", 8)))
+            self._phase_c_path = stn_dict.get(
+                "phase_c_diagnostics_path", "/data/phase-c-diagnostics")
+            receiver.phase_c_diagnostics = self._phase_c_diagnostics
         self._ab_diagnostics = None
         self._ab_summary_seconds = None
         self._ab_summary_next = None
@@ -791,6 +803,18 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             log.info('RF diagnostics %s interval=%ds counters=%s',
                      label, self._diagnostic_summary_seconds, delta)
 
+    def _maybe_write_phase_c_captures(self):
+        """Persist completed Phase C captures on the WeeWX loop thread."""
+        if self._phase_c_diagnostics is None:
+            return
+        try:
+            from user.rtldavis_phase_c_diagnostics import persist_captures
+            for path in persist_captures(self._phase_c_diagnostics,
+                                         self._phase_c_path):
+                log.info("Phase C capture saved: %s", path)
+        except Exception:
+            log.exception("Phase C capture persistence failed")
+
     def genLoopPackets(self):
         """Yield observations as frames arrive. Without reception, wait.
 
@@ -813,6 +837,7 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             self._maybe_log_diagnostic_summary()
             self._maybe_log_wind_summary()
             self._maybe_write_ab_summary()
+            self._maybe_write_phase_c_captures()
             if self._radio.failure is not None:
                 raise weewx.WeeWxIOError("receiver failed: %s" % self._radio.failure)
             try:

@@ -41,7 +41,11 @@ class PhaseCDiagnostics:
                 self._history.popleft()
             if self._active is not None:
                 if now <= self._active["end_monotonic"]:
-                    self._active["events"].append(item)
+                    events = self._active["events"]
+                    if len(events) >= self.max_events:
+                        events.pop(0)
+                        self._active["truncated_events"] += 1
+                    events.append(item)
                 else:
                     self._queue_completed()
         return item
@@ -57,6 +61,7 @@ class PhaseCDiagnostics:
                 "reason": str(reason), "trigger_monotonic": now,
                 "end_monotonic": now + self.after_seconds,
                 "trigger_fields": dict(fields),
+                "truncated_events": 0,
                 "events": [dict(item) for item in self._history
                            if start <= item["monotonic"] <= now],
             }
@@ -126,3 +131,31 @@ def observe_sample_processing(diagnostics, feed, data, arrival,
             queue_depth=queue_depth,
             sample_bytes=len(data),
             error=error)
+
+
+def persist_captures(diagnostics, directory, timestamp=None):
+    """Drain and persist completed captures from the WeeWX consumer thread.
+
+    Uses exclusive creation to avoid overwriting an existing capture. The
+    caller should catch I/O exceptions and log them; this helper never runs
+    in the radio processing thread.
+    """
+    import json
+    from pathlib import Path
+    import uuid
+
+    captures = diagnostics.drain(timestamp=timestamp)
+    if not captures:
+        return []
+    destination = Path(directory)
+    destination.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for capture in captures:
+        name = 'phase-c-%s-%s.json' % (time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()),
+                                       uuid.uuid4().hex[:12])
+        path = destination / name
+        with path.open('x', encoding='utf-8') as output:
+            json.dump(capture, output, sort_keys=True, indent=2, allow_nan=False)
+            output.write('\n')
+        paths.append(path)
+    return paths
