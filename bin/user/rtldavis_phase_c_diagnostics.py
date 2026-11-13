@@ -99,3 +99,30 @@ def observe_hardware_tune(diagnostics, tune, frequency, receiver,
             tune_complete_lead_ms=(round((expected - finished) * 1000, 3)
                                    if expected is not None else None),
             error=error)
+
+
+def observe_sample_processing(diagnostics, feed, data, arrival,
+                              queue_depth=None, clock=None):
+    """Measure sample-block age and feed duration without changing feed semantics.
+
+    The USB callback timestamps arrival with time.monotonic(). The radio thread
+    invokes this helper only when Phase C is enabled. No IQ bytes are retained.
+    """
+    timer = clock or time.monotonic
+    started = timer()
+    error = None
+    try:
+        return feed(data, arrival)
+    except BaseException as exc:
+        error = type(exc).__name__
+        raise
+    finally:
+        finished = timer()
+        diagnostics.observe(
+            "sample_processing", timestamp=finished,
+            queue_wait_ms=round(max(0.0, started - arrival) * 1000, 3),
+            demod_duration_ms=round((finished - started) * 1000, 3),
+            completion_age_ms=round(max(0.0, finished - arrival) * 1000, 3),
+            queue_depth=queue_depth,
+            sample_bytes=len(data),
+            error=error)

@@ -879,7 +879,15 @@ class Radio(threading.Thread):
                             data, arrival = blocks.get(timeout=1)
                         except queue.Empty:
                             continue
-                        for frame in self.receiver.feed(data, arrival):
+                        if self.receiver.phase_c_diagnostics is None:
+                            frames = self.receiver.feed(data, arrival)
+                        else:
+                            from user.rtldavis_phase_c_diagnostics import observe_sample_processing
+                            frames = observe_sample_processing(
+                                self.receiver.phase_c_diagnostics,
+                                self.receiver.feed, data, arrival,
+                                queue_depth=blocks.qsize())
+                        for frame in frames:
                             self.frames.put(frame)
                         if self.receiver.frequency != tuned:
                             tuned = self.receiver.frequency
