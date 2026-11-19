@@ -55,14 +55,44 @@ class ABDiagnostics:
     def _write_manifest(self, details):
         try:
             self.directory.mkdir(parents=True, exist_ok=True)
-            # A test manifest is per-run: make the timestamp part of its identity.
-            metadata = {"created_utc": self._utc(self.clock()),
-                        "phase": self.phase, "host": self.host,
-                        "dongle_id": self.dongle_id}
+
+            # Preserve experiment segments across receiver restarts.
+            segments = {}
+            if self._manifest_path.exists():
+                with self._manifest_path.open("r", encoding="utf-8") as source:
+                    previous = json.load(source)
+                if not isinstance(previous, dict):
+                    raise ValueError("Existing A/B manifest is not a JSON object")
+                segments = previous.get("segments", {})
+                if not isinstance(segments, dict):
+                    raise ValueError("Existing A/B manifest segments must be an object")
+
+            # Regenerate per-run metadata.
+            metadata = {
+                "created_utc": self._utc(self.clock()),
+                "phase": self.phase,
+                "host": self.host,
+                "dongle_id": self.dongle_id,
+            }
             metadata.update(details)
-            with self._manifest_path.open("w", encoding="utf-8") as output:
-                json.dump(metadata, output, indent=2, sort_keys=True)
-                output.write("\n")
+
+            if segments:
+                metadata["segments"] = segments
+
+            # Write atomically to avoid a partially written manifest.
+            temporary = self._manifest_path.with_name(
+                self._manifest_path.name + ".tmp"
+            )
+
+            try:
+                with temporary.open("w", encoding="utf-8") as output:
+                    json.dump(metadata, output, indent=2, sort_keys=True)
+                    output.write("\n")
+                os.replace(temporary, self._manifest_path)
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+
         except (OSError, ValueError, TypeError):
             log.exception("Cannot write A/B diagnostic manifest")
             self._enabled = False
