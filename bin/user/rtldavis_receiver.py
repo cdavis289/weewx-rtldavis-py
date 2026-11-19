@@ -297,6 +297,29 @@ class Receiver:
                     frequency_error_hz=candidate.frequency_error)
             log.debug("ignoring second decode of a burst: %s", candidate.payload.hex())
             return None
+        # Phase C: do not let an implausibly early, CRC-valid candidate
+        # re-anchor the schedule or contaminate frequency learning.
+        # Search/reacquisition is deliberately exempt from this guard.
+        if not self._syncing and transmitter in self.index:
+            i = self.index[transmitter]
+            last = self._last_visit[i]
+            if last is not None:
+                period = transmitter_period(transmitter)
+                expected = last + period
+                # Advance past already missed periods. _timeout() also
+                # advances _last_visit during normal missed-frame handling.
+                while expected + RECEIVE_WINDOW < now:
+                    expected += period
+                if now < expected - 0.300:
+                    self.diagnostic_counts["timing_early_suppressed"] = (
+                        self.diagnostic_counts.get("timing_early_suppressed", 0) + 1
+                    )
+                    log.warning(
+                        "ignoring early candidate for channel %d: %.1f ms "
+                        "before predicted visit (freq error %+.0f Hz)",
+                        transmitter + 1, (expected - now) * 1000,
+                        candidate.frequency_error)
+                    return None
         self._accepted[transmitter] = now
         self._last_accepted_payload[transmitter] = candidate.payload
         # Another station's transmitter may be off by a different amount, and
