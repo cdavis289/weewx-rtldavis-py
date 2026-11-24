@@ -847,9 +847,15 @@ class Radio(threading.Thread):
         self._problem = (None, 0)
         self._synchronous = False
         self.ab_diagnostics = None
-        self.ab_counters = {'usb_dropped_blocks': 0, 'usb_zero_blocks': 0,
-                            'usb_stream_restarts': 0, 'usb_tune_errors': 0,
-                            'max_queue_depth': 0}
+        self.diagnostic_counts = {
+            'usb_dropped_blocks': 0,
+            'usb_zero_blocks': 0,
+            'usb_stream_restarts': 0,
+            'usb_tune_errors': 0,
+            'max_queue_depth': 0,
+        }
+        # Temporary compatibility until A/B diagnostics are removed.
+        self.ab_counters = self.diagnostic_counts
 
     def run(self):
         try:
@@ -899,8 +905,7 @@ class Radio(threading.Thread):
 
         def receive(data, arrival):
             if not data.strip(b'\0'):
-                if self.ab_diagnostics is not None:
-                    self.ab_counters['usb_zero_blocks'] += 1
+                self.diagnostic_counts['usb_zero_blocks'] += 1
                 empty[0] += 1
                 if empty[0] >= self.EMPTY_BLOCKS and not self._synchronous:
                     dongle.cancel()
@@ -908,12 +913,10 @@ class Radio(threading.Thread):
             empty[0] = 0
             try:
                 blocks.put_nowait((data, arrival))
-                if self.ab_diagnostics is not None:
-                    self.ab_counters['max_queue_depth'] = max(
-                        self.ab_counters['max_queue_depth'], blocks.qsize())
+                self.diagnostic_counts['max_queue_depth'] = max(
+                    self.diagnostic_counts['max_queue_depth'], blocks.qsize())
             except queue.Full:
-                if self.ab_diagnostics is not None:
-                    self.ab_counters['usb_dropped_blocks'] += 1
+                self.diagnostic_counts['usb_dropped_blocks'] += 1
                 dropped[0] += 1
 
         def stream():
@@ -937,9 +940,10 @@ class Radio(threading.Thread):
                                       tuned, self.receiver, reason="initial")
             stream_started = False
             while True:
-                if stream_started and self.ab_diagnostics is not None:
-                    self.ab_counters['usb_stream_restarts'] += 1
-                    self.ab_diagnostics.event('usb_stream_restarted', synchronous=self._synchronous)
+                if stream_started:
+                    self.diagnostic_counts['usb_stream_restarts'] += 1
+                    if self.ab_diagnostics is not None:
+                        self.ab_diagnostics.event('usb_stream_restarted', synchronous=self._synchronous)
                 stream_started = True
                 del result[:]
                 with lock:
@@ -975,8 +979,8 @@ class Radio(threading.Thread):
                                         self.receiver.phase_c_diagnostics, dongle.tune,
                                         tuned, self.receiver, reason="hop")
                             except OSError as e:
+                                self.diagnostic_counts['usb_tune_errors'] += 1
                                 if self.ab_diagnostics is not None:
-                                    self.ab_counters['usb_tune_errors'] += 1
                                     self.ab_diagnostics.event('usb_tune_error', message=str(e))
                                 # The next hop retunes anyway; one failure is not fatal.
                                 log.warning("%s", e)

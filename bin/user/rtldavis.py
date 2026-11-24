@@ -792,7 +792,14 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             return
         self._diagnostic_summary_next = now + self._diagnostic_summary_seconds
         receiver = self._radio.receiver
-        sources = [('receiver', receiver.diagnostic_counts)]
+        radio_counts = dict(self._radio.diagnostic_counts)
+        max_queue_depth = radio_counts.pop('max_queue_depth', 0)
+        sources = [
+            ('receiver', receiver.diagnostic_counts),
+            ('radio', radio_counts),
+        ]
+        log.info('RF diagnostics radio max_queue_depth=%d',
+                 max_queue_depth)
         demodulator = receiver._demodulator
         if demodulator is not None:
             sources.append(('demodulator', demodulator.diagnostic_counts))
