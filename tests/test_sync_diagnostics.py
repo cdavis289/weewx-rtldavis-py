@@ -16,7 +16,6 @@ def test_missed_frames_trigger_loss_and_reacquisition():
         max_events=20000,
         clock=lambda: 0.0)
     receiver.phase_c_diagnostics = recorder
-    assert receiver.ab_diagnostics is None
     receiver.start(0.0)
 
     # Simulate an already synchronized receiver; keep the same timeout path
@@ -27,7 +26,7 @@ def test_missed_frames_trigger_loss_and_reacquisition():
     receiver._last_hop[0] = 0
     receiver._next = 0
     receiver._missed[0] = 0
-    receiver._ab_last_frame = 0.0
+    receiver._last_frame = 0.0
     for index in range(MAX_MISSED + 1):
         receiver._timeout(receiver._deadline)
 
@@ -61,7 +60,6 @@ def test_lock_loss_event_does_not_change_frequency_reset_policy():
         max_events=20000,
         clock=lambda: 0.0)
     receiver.phase_c_diagnostics = recorder
-    assert receiver.ab_diagnostics is None
     receiver.start(0.0)
     receiver.locked = True
     receiver.learned[(0, 0)] = 8000
@@ -78,4 +76,3 @@ def test_standalone_diagnostics_disabled_by_default():
     rx = Receiver("EU", [0])
     radio = Radio(rx)
     assert rx.phase_c_diagnostics is None
-    assert radio.ab_diagnostics is None

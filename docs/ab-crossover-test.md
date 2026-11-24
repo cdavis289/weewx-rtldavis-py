@@ -1,5 +1,8 @@
 # RTL-SDR A/B crossover test
 
+> **Historical document:** The A/B comparison recorder has been removed from the standalone Python driver. This procedure is retained for historical reference only.
+
+
 This procedure is intended to identify whether intermittent Python receiver
 synchronization losses follow a **dongle**, a **receiver implementation**, a
 **host/USB/RF path**, or shared interference. An association is not proof of

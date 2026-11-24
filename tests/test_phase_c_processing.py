@@ -56,4 +56,3 @@ def test_processing_diagnostics_do_not_require_usb_hardware():
     receiver = Receiver("US", [7])
     radio = Radio(receiver)
     assert receiver.phase_c_diagnostics is None
-    assert radio.ab_diagnostics is None

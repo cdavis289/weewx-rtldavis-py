@@ -10,7 +10,6 @@ from user.rtldavis import RtldavisDriver
 def test_radio_counters_without_ab():
     radio = Radio(Receiver("US", [7]))
 
-    assert radio.ab_diagnostics is None
     assert radio.diagnostic_counts == {
         "usb_dropped_blocks": 0,
         "usb_zero_blocks": 0,

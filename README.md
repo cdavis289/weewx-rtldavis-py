@@ -79,12 +79,12 @@ explains the log messages and how to test reception without WeeWX.
 
 ## Experimental diagnostics and development history
 
-Optional gust, frame, RF and A/B synchronization diagnostics are available
+Optional gust, frame, RF and synchronization diagnostics are available
 on the experimental feature branch and **disabled by default**. See the
 [configuration reference](docs/configuration.md) for options, the
 [development history and rationale](docs/development-history.md) for why
-changes were made, and the [dongle A/B crossover procedure](docs/ab-crossover-test.md)
-for controlled testing. Do not enable experimental diagnostics in production
+changes were made, and the historical [dongle A/B crossover procedure](docs/ab-crossover-test.md)
+used during controlled testing. Do not enable experimental diagnostics in production
 without testing the installation and using a persistent output path.
 
 ## Limitations

@@ -190,33 +190,27 @@ compared directly with Go's CRC or reception counts. The original decoding,
 frame acceptance, and `rxCheckPercent` calculation remain unchanged.
 The first summary includes counts accumulated since the receiver started.
 
-## A/B crossover synchronization diagnostics (experimental)
+The periodic summary also includes:
 
-Enable only during controlled dongle-swap tests. See the
-[A/B crossover procedure](ab-crossover-test.md) and
-[development history](development-history.md).
+- Missed frame predictions, synchronization losses and acquisitions.
+- USB zero sample blocks and dropped sample blocks.
+- USB stream restarts and tuning errors.
+- Maximum USB queue depth since the radio was initialized, reported
+  separately as a cumulative high-water mark rather than an interval delta.
 
-```ini
-[Rtldavis]
-    ab_diagnostics_enabled = false
-    ab_diagnostics_path = /data/ab-diagnostics/phase-a
-    ab_phase = A
-    ab_host = odysseyblue
-    ab_dongle_id = SERIAL_FROM_RTL_EEPROM
-    ab_diagnostic_summary_seconds = 300
-```
+Synchronization acquisition, loss, frequency lock loss and probation
+failure are reported in the normal driver log. Acquisition events include
+elapsed acquisition and recovery durations when available.
 
-With `ab_diagnostics_enabled = true`, the Python receiver writes a phase
-manifest, sparse synchronization/USB JSONL events, and cumulative-counter
-deltas to a five-minute CSV. The output directory must be persistent and
-writable by WeeWX. Use a separate directory for each run; the manifest
-is overwritten when a run starts, and CSV rows append otherwise.
+These diagnostics do not require an A/B experiment recorder. Periodic
+summaries are disabled by default.
 
-The receiver records consecutive missed-prediction milestones (1, 10, 25,
-50), synchronization loss after the existing `MAX_MISSED` threshold,
-frequency lock loss and reacquisition, and USB empty/dropped-block events.
-The recorder also records frequency offset, queue depth and read mode.
-The event timestamp is UTC; elapsed durations use monotonic seconds.
+## Historical A/B diagnostics
 
-**No tuning, packet filtering, RF hop timing, or reception calculation is
-changed.** This diagnostic feature is Python-only and disabled by default.
+The Go/Python comparison recorder has been removed from the production
+driver. Its former `ab_*` configuration options are no longer used and
+should be removed from existing configurations.
+
+Historical experiment data is not modified or deleted by this change.
+See the [development history](development-history.md) and the historical
+[A/B crossover procedure](ab-crossover-test.md) for background.
