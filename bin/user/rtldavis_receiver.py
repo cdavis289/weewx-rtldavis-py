@@ -363,15 +363,15 @@ class Receiver:
                         log.info("Receiving all configured transmitters")
                     self._syncing = False
                     self.diagnostic_counts['sync_acquired'] += 1
-                    if self.ab_diagnostics is not None:
-                        self.ab_diagnostics.event(
-                            'synchronization_acquired', transmitter=transmitter + 1,
-                            reason=self._ab_sync_reason,
-                            acquisition_seconds=(round(now - self._ab_sync_started, 3)
-                                                 if self._ab_sync_started is not None else None),
-                            recovery_seconds=(round(now - self._ab_loss_started, 3)
-                                              if self._ab_loss_started is not None else None),
-                            frequency_offset_hz=round(self.offset, 1))
+                    self._record_sync_event(
+                        'synchronization_acquired', now,
+                        transmitter=transmitter + 1,
+                        reason=self._ab_sync_reason,
+                        acquisition_seconds=(round(now - self._ab_sync_started, 3)
+                                             if self._ab_sync_started is not None else None),
+                        recovery_seconds=(round(now - self._ab_loss_started, 3)
+                                          if self._ab_loss_started is not None else None),
+                        frequency_offset_hz=round(self.offset, 1))
                     self._ab_loss_started = None
                     hop = True
             else:
@@ -426,9 +426,9 @@ class Receiver:
         if hits + misses >= PROBATION_MINIMUM and hits * 3 < misses:
             log.info("Few frames arrive at %+.1f kHz; the first one probably came "
                      "from a neighbouring channel. Searching on.", self.offset / 1000)
-            if self.ab_diagnostics is not None:
-                self.ab_diagnostics.event('probation_failed', hits=hits, misses=misses,
-                                          frequency_offset_hz=round(self.offset, 1))
+            self._record_sync_event(
+                'probation_failed', now, hits=hits, misses=misses,
+                frequency_offset_hz=round(self.offset, 1))
             self._ab_sync_reason = 'probation_failed'
             self._ab_loss_started = now
             self.diagnostic_counts['sync_losses'] += 1
@@ -451,6 +451,19 @@ class Receiver:
                  "configured. If this transmitter belongs to your station, set its "
                  "channel in [Rtldavis], for example iss_channel = %d.",
                  transmitter + 1, configured, transmitter + 1)
+
+    def _record_sync_event(self, name, now, **fields):
+        """Record synchronization telemetry independently of A/B."""
+        if self.phase_c_diagnostics is not None:
+            self.phase_c_diagnostics.observe(
+                name, timestamp=now, **fields)
+
+        if name != "missed_frame_streak":
+            log.info("Receiver synchronization %s: %s", name, fields)
+
+        # Temporary compatibility with the A/B experiment.
+        if self.ab_diagnostics is not None:
+            self.ab_diagnostics.event(name, **fields)
 
     def _synchronize(self, now):
         """Listen on the first channel of the sequence until each transmitter sends."""
@@ -529,10 +542,10 @@ class Receiver:
                 if self._empty_periods >= LOST_LOCK_PERIODS:
                     log.info("No Davis transmitter heard for %.0f s, searching the "
                              "frequency again", self._empty_periods * self.sync_period)
-                    if self.ab_diagnostics is not None:
-                        self.ab_diagnostics.event('frequency_lock_lost',
-                            empty_periods=self._empty_periods,
-                            frequency_offset_hz=round(self.offset, 1))
+                    self._record_sync_event(
+                        'frequency_lock_lost', now,
+                        empty_periods=self._empty_periods,
+                        frequency_offset_hz=round(self.offset, 1))
                     self.diagnostic_counts['sync_losses'] += 1
                     if self.phase_c_diagnostics is not None:
                         self.phase_c_diagnostics.trigger(
@@ -553,14 +566,9 @@ class Receiver:
         self._last_hop[i] = (self._last_hop[i] + 1) % len(self.pattern)
         self._missed[i] += 1
         self.diagnostic_counts['missed_predictions'] += 1
-        if self.phase_c_diagnostics is not None and self._missed[i] in (10, 25, 50):
-            self.phase_c_diagnostics.observe(
-                "missed_frame_streak", transmitter=transmitter + 1,
-                missed_frames=self._missed[i],
-                expected_channel=self._expected[1],
-                tuned_frequency_hz=self.frequency)
-        if self.ab_diagnostics is not None and self._missed[i] in (1, 10, 25, 50):
-            self.ab_diagnostics.event('missed_frame_streak',
+        if self._missed[i] in (1, 10, 25, 50):
+            self._record_sync_event(
+                'missed_frame_streak', now,
                 transmitter=transmitter + 1, missed_frames=self._missed[i],
                 expected_channel=self._expected[1], tuned_frequency_hz=self.frequency,
                 frequency_offset_hz=round(self.offset, 1),
@@ -580,13 +588,13 @@ class Receiver:
                     missed_frames=self._missed[i],
                     tuned_frequency_hz=self.frequency,
                     frequency_offset_hz=round(self.offset, 1))
-            if self.ab_diagnostics is not None:
-                self.ab_diagnostics.event("synchronization_lost",
-                    transmitter=transmitter + 1, missed_frames=self._missed[i],
-                    tuned_frequency_hz=self.frequency,
-                    frequency_offset_hz=round(self.offset, 1),
-                    seconds_since_last_frame=(round(now - self._ab_last_frame, 3)
-                                              if self._ab_last_frame is not None else None))
+            self._record_sync_event(
+                "synchronization_lost", now,
+                transmitter=transmitter + 1, missed_frames=self._missed[i],
+                tuned_frequency_hz=self.frequency,
+                frequency_offset_hz=round(self.offset, 1),
+                seconds_since_last_frame=(round(now - self._ab_last_frame, 3)
+                                          if self._ab_last_frame is not None else None))
             log.info("Lost transmitter on channel %d, synchronizing again", transmitter + 1)
             self._synchronize(now)
         else:
