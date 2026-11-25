@@ -16,8 +16,8 @@ jobs:
         python: ['3.10', '3.12', '3.14']
         weewx: ['5.0.2', '5.5.2']
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install pytest numpy 'weewx==${{ matrix.weewx }}'
