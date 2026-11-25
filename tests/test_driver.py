@@ -62,6 +62,29 @@ def test_calm_wind_clears_last_speed(driver):
     assert data['wind_dir'] is None
 
 
+@pytest.mark.parametrize('message', [8, 0xA, 0xE])
+def test_wind_fraction_in_low_nibble_of_byte_5(driver, message):
+    raw = bytearray(frame_bytes(message=message, speed=0)); raw[5] = 0x08
+    data = driver.parse_readings(raw)
+    assert data['wind_speed'] == pytest.approx(0.5 * rtl.MPH_TO_MPS)
+    assert data['wind_dir'] == pytest.approx(180.675889)
+
+
+def test_wind_fraction_in_gust_message(driver):
+    raw = bytearray(frame_bytes(message=9, speed=3)); raw[4] = 0xC3; raw[5] = 0x48
+    assert driver.parse_readings(raw)['wind_speed'] == pytest.approx(3.75 * rtl.MPH_TO_MPS)
+
+
+def test_recorded_calm_frames_carry_no_fraction(driver):
+    # Every frame in this recording reports 0 mph, while the low nibble of
+    # byte 4 and, in message 9, of byte 5 are set.
+    driver.channels['iss'] = driver.channels['wind_channel'] = 2
+    lines = (Path(__file__).parent / 'fixtures/issue24.txt').read_text().splitlines()
+    payloads = [bytes.fromhex(line.split()[1]) for line in lines if line.strip()]
+    speeds = {driver.parse_readings(payload).get('wind_speed') for payload in payloads}
+    assert speeds == {0, None}
+
+
 def test_wind_only_from_selected_transmitter(driver):
     driver.channels['anemometer'] = driver.channels['wind_channel'] = 2
     assert 'wind_speed' not in driver.parse_readings(frame_bytes(channel=1, speed=30))
@@ -171,3 +194,25 @@ def test_frame_counts_reach_archive_statistics(driver):
 @pytest.mark.parametrize('message', [0, 1, 0xB, 0xD, 0xF])
 def test_frame_with_impossible_message_type_is_discarded(driver, message):
     assert driver.parse_readings(frame_bytes(message=message)) == {}
+
+
+def test_gust_diagnostics_disabled_by_default(driver):
+    assert driver._gust_diagnostics is None
+
+
+def test_gust_diagnostics_preserves_weewx_packet(monkeypatch, tmp_path):
+    monkeypatch.setattr(rtldavis_receiver.Radio, 'start', lambda self: None)
+    station = rtl.RtldavisDriver(None, {'Rtldavis': {
+        'gust_diagnostics_enabled': 'true',
+        'gust_diagnostics_path': str(tmp_path),
+        'gust_capture_after_seconds': '0',
+    }})
+    raw = bytearray(frame_bytes(message=9))
+    raw[3] = 70
+    raw[5] = 0x10
+    frame = SimpleNamespace(
+        payload=bytes(raw), counts=(1, 1, 1, 1),
+        transmitter=0, channel=1, frequency_offset=0)
+    packet = station._frame_to_packet(frame)
+    assert packet['windGust'] == pytest.approx(70 * rtl.MPH_TO_MPS)
+    assert len(list(tmp_path.glob('gust-*.json'))) == 1

@@ -1,5 +1,22 @@
 # Changes
 
+## Unreleased fork changes (based on upstream 0.23.0)
+
+- Preserve the validated Phase C2 early timing guard.
+- Remove A/B comparison infrastructure while retaining synchronization and USB telemetry.
+- Report early timing guard counts and rejection metadata.
+- Bound gust history, duration, frames, events and pending captures.
+- Persist captures atomically with failed-write retry throttling.
+- Enforce shared storage retention at startup, after writes and periodically.
+- Increase Phase C defaults to 180 seconds and 20,000 events.
+- Verify fractional wind compatibility and retain historical A/B documentation.
+
+## 0.23.0 (2026-11-17)
+
+- Add the sixteenths of a mph that newer transmitters send with the wind
+  speed. Older transmitters still report whole mph. Wind direction is
+  reported for any speed above 0.
+
 ## 0.22.2 (2026-10-30)
 
 - Name `rtl-sdr` as the package to install. Ubuntu 24.04 calls the library
@@ -91,3 +108,14 @@ and hardware verification. General elimination of every isolated corrupt reading
 is also unverified. See docs/troubleshooting.md.
 
 Earlier history is recorded in [changelog](changelog).
+
+
+### Standalone production hardening
+
+- Restore receiver health telemetry and USB reconnection counters.
+- Aggregate routine Phase C sample-processing diagnostics.
+- Use bounded deque storage for active Phase C captures.
+- Harden diagnostic persistence and graceful shutdown handling.
+- Report diagnostic write failures and dropped captures.
+- Expand Python compatibility testing to include Python 3.12.
+- Validate packaged driver modules, installer manifest and imports.

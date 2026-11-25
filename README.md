@@ -36,6 +36,10 @@ Install `rtldavis` from the [WeeWX packages catalog](https://github.com/weewx-pa
 The catalog page lists the current release, its WeeWX and Python
 requirements, and the install, update and removal commands.
 
+For fork-specific changes, build the extension from the desired fork
+revision with `python tools/package.py`. The upstream catalog release
+does not include these fork-specific changes.
+
 Then select the driver. It asks for the frequency band, the ISS channel and
 the rain bucket:
 
@@ -77,12 +81,28 @@ The [configuration reference](docs/configuration.md) lists every option with
 its default and the observations. [Troubleshooting](docs/troubleshooting.md)
 explains the log messages and how to test reception without WeeWX.
 
+## Optional diagnostics and development history
+
+Optional gust, frame, RF, wind-validation and synchronization diagnostics
+are disabled by default. Evidence captures use bounded memory and are
+written on anomalies, not as continuous raw SDR IQ recordings. Completed
+captures have individual file-count limits and a combined 50 MiB default
+retention budget, enforced at startup, after writes and periodically.
+
+See the [configuration reference](docs/configuration.md) and
+[development history](docs/development-history.md). The historical
+[dongle A/B crossover procedure](docs/ab-crossover-test.md) documents
+controlled testing; the comparison recorder has been removed.
+Use writable, persistent capture directories.
+
 ## Limitations
 
 - Tests cover recorded problem frames and simulated transmitters with
   frequency errors. The librtlsdr binding and the installation into WeeWX were
-  checked against a stand-in library that plays recorded samples. Live RF
-  reception has not been tested on real hardware.
+  checked against a stand-in library that plays recorded samples. This fork has also undergone controlled live US-band RF testing with a
+  Davis Vantage Pro2. Phase C2 completed approximately six days without
+  synchronization loss. The subsequent production integration still
+  requires live validation; other hardware and bands remain unverified.
 - The first observations can take a while. Each of the five steps of the
   frequency search lasts 18 seconds in the EU band and 136 seconds in the US
   and NZ bands for an ISS on channel 1, up to 21 and 159 seconds on channel 8.

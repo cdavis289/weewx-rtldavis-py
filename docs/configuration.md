@@ -42,6 +42,8 @@ own frequency correction.
 Standard output includes temperature, humidity, wind speed/direction, transmitter
 reported gust, rain, rain rate, radiation, UV and transmitter battery status.
 Rain comes only from `iss_channel`, wind only from the selected wind transmitter.
+Wind speed has a resolution of 1/16 mph from transmitters that send it, such
+as newer Vantage Vue ISS, and of 1 mph from the others.
 `windGust` is the ISS's stored peak, whose reporting window is defined by the
 transmitter. Its direction is unavailable. WeeWX still aggregates LOOP wind
 samples for archive records.
@@ -95,3 +97,226 @@ Digital temperature sentinels `0xFFC` and `0xFF8`, invalid thermistor resistance
 and zero rain-tip intervals produce missing observations.
 CRC and timing checks cannot reject every plausible, isolated corrupt frame.
 Use WeeWX's `[StdQC]` for local observation ranges.
+
+
+## Optional wind validation history (experimental)
+
+Disabled by default. This feature records rolling decoded wind-speed maxima and the latest type-9 gust from the configured wind transmitter. It does not filter observations, change LOOP packets, or modify archive records.
+
+Configuration:
+
+    [Rtldavis]
+        wind_validation_enabled = false
+        wind_validation_summary_seconds = 60
+
+When enabled, the driver logs a summary every 60 seconds by default, including receiver five- and ten-minute maxima, transmitter-reported gust, report age, freshness, and sample counts.
+
+The internal field name issWindGust10 refers to the configured wind transmitter, which may be a separate anemometer rather than the ISS. The transmitter reporting window and receiver rolling window may not align. Missing RF frames can also make receiver maxima incomplete. These comparisons are diagnostic only.
+
+## Optional gust-anomaly evidence capture
+
+Disabled by default. This is a diagnostic recorder, **not** a wind filter:
+all gusts continue into WeeWX unchanged. Captures contain decoded eight-byte
+Davis payloads and receiver metadata, **not** raw SDR IQ samples. The feature
+uses bounded history, capture duration, frame and event counts, and pending
+captures. Completed JSON files are written atomically and subject to retention limits. Ensure the destination directory is writable and persistent.
+
+```ini
+[Rtldavis]
+    gust_diagnostics_enabled = false
+    gust_diagnostics_path = /data/gust-diagnostics
+    gust_absolute_threshold_mph = 50
+    gust_ratio_threshold = 5
+    gust_ratio_minimum_mph = 25
+    gust_capture_before_seconds = 300
+    gust_capture_after_seconds = 60
+    gust_diagnostics_max_files = 100
+    gust_capture_max_frames = 4096
+    gust_capture_max_events = 128
+    gust_capture_max_pending = 8
+    gust_capture_max_seconds = 180
+```
+
+A type-9 frame at or above the absolute threshold triggers capture immediately.
+At archive close, a high gust can also trigger capture when its ratio to the
+five-minute average wind speed exceeds the configured threshold. Relative
+checks require a positive average speed. Evidence includes frames received
+before and after the trigger, subject to the configured window and the receiver
+actually receiving those frames. The capture file is finalized after the
+post-trigger window or when the driver closes normally. A diagnostic write
+failure is logged but does not affect weather readings.
+
+Overlapping triggers can extend an active capture up to the configured
+maximum post-trigger duration (at least the configured after-window).
+Frame and event limits discard oldest entries. Failed writes are queued
+for retry; a full pending queue discards its oldest capture. Unwritten
+memory evidence may be lost on restart. Fractional speeds are preserved
+in threshold comparisons.
+
+
+## Optional RF frame diagnostics (experimental)
+
+```ini
+[Rtldavis]
+    frame_diagnostics_enabled = false
+```
+
+When enabled, log diagnostic-only labels for accepted frames: identical or
+changed payloads received on the same transmitter channel within 500 ms, and
+out-of-bounds decoded temperature, humidity, wind, or UV readings. The driver
+still forwards all observations unchanged. Counters are held in memory and
+accessible at `driver._frame_diagnostics.counts` for test inspection.
+
+**Scope:** This is not a direct port of Go's CRC, burst or time gates. The
+Python receiver already rejects second decodes inside its own 2.5-second
+burst guard, before the WeeWX driver sees them. Consequently these counters
+measure only frames reaching the driver, and cannot quantify pre-acceptance
+CRC failures or suppressed bursts. Do not compare these counts directly with
+Go decoder statistics. Reception percentages are unchanged.
+
+
+## Receiver diagnostic counters
+
+Receiver counters are independent of optional capture features and are
+included in periodic summaries when enabled.
+
+| Counter | Meaning |
+| --- | --- |
+| `accepted` | Accepted frames. |
+| `burst_suppressed` | Burst guard rejections. |
+| `burst_identical`, `burst_different` | Suppressed candidates classified by payload equality. |
+| `timing_early_suppressed` | Candidates rejected more than 300 ms before their predicted visit. |
+| `missed_predictions` | Missed expected frame visits. |
+| `sync_losses` | Synchronization or frequency-lock loss events. |
+| `sync_acquired` | Synchronization acquisitions. |
+
+The early guard is exempt during acquisition and reacquisition. Rejected
+candidates do not re-anchor the schedule or update learned offsets.
+The timing counter is initialized to zero; CRC counters are separate.
+
+## Periodic RF diagnostic summaries
+
+```ini
+[Rtldavis]
+    diagnostic_summary_enabled = false
+    diagnostic_summary_seconds = 300
+```
+
+When enabled, the driver logs interval deltas for accepted frames, suppressed
+bursts (identical and differing payloads), demodulator CRC-valid, CRC-failed,
+and zero-payload threshold attempts, and optional frame-level flags. These are
+**threshold attempts**, not independent over-the-air frames, and cannot be
+compared directly with Go's CRC or reception counts. The original decoding,
+frame acceptance, and `rxCheckPercent` calculation remain unchanged.
+The first summary includes counts accumulated since the receiver started.
+
+The periodic summary also includes:
+
+- Early timing guard suppressions, including zero-count intervals.
+- Missed frame predictions, synchronization losses and acquisitions.
+- USB zero sample blocks and dropped sample blocks.
+- USB stream restarts and tuning errors.
+- Maximum USB queue depth since the radio was initialized, reported
+  separately as a cumulative high-water mark rather than an interval delta.
+
+Synchronization acquisition, loss, frequency lock loss and probation
+failure are reported in the normal driver log. Acquisition events include
+elapsed acquisition and recovery durations when available.
+
+These diagnostics do not require an A/B experiment recorder. Periodic
+summaries are disabled by default.
+
+## Optional Phase C receiver evidence capture
+
+Disabled by default. Receiver event metadata is held in bounded memory
+and saved atomically after synchronization anomalies. No raw IQ is saved.
+
+```ini
+[Rtldavis]
+    phase_c_diagnostics_enabled = false
+    phase_c_diagnostics_path = /data/phase-c-diagnostics
+    phase_c_before_seconds = 180
+    phase_c_after_seconds = 60
+    phase_c_max_events = 20000
+    phase_c_sample_summary_seconds = 1
+    phase_c_max_pending = 8
+    phase_c_max_files = 100
+```
+
+Evidence includes candidate acceptance and rejection, early timing guard
+metadata, demodulation statistics, synchronization and hardware timing.
+The history duration is an upper bound: high event rates may exhaust the
+count limit sooner. Repeated triggers do not extend an active capture.
+Persistence runs on the WeeWX loop thread, not the RF producer.
+
+## Shared diagnostic storage retention
+
+```ini
+[Rtldavis]
+    diagnostic_storage_max_bytes = 52428800
+    diagnostic_cleanup_seconds = 300
+    diagnostic_write_retry_seconds = 30
+```
+
+The combined default budget is 50 MiB. Retention first enforces each
+collector's file-count limit, then removes oldest remaining captures by
+modification time until the combined budget is met. Cleanup runs at
+startup, after successful writes and periodically. Failed writes are
+retried after the configured delay.
+
+Only recognized completed capture filenames in enabled collectors are
+eligible. Unrelated files, symlink entries, historical A/B files and logs
+are excluded. Disabled collectors are not cleaned. This is a retention
+limit, not a hard filesystem quota: temporary files and writes may exceed
+it, and filesystem errors may prevent enforcement. Zero bytes retains no
+completed captures; an oversized capture may be removed immediately.
+
+## Historical A/B diagnostics
+
+The Go/Python comparison recorder has been removed from the production
+driver. Its former `ab_*` configuration options are no longer used and
+should be removed from existing configurations.
+
+Historical experiment data is not modified or deleted by this change.
+See the [development history](development-history.md) and the historical
+[A/B crossover procedure](ab-crossover-test.md) for background.
+
+
+### Standalone receiver health and diagnostic persistence
+
+Periodic RF health summaries include USB read mode, connection status,
+synchronization status, frequency-lock status, frequency offset,
+last accepted frame age and decoded-frame queue depth.
+
+The `usb_reconnections` counter records successful device reopenings
+after the initial connection. It is separate from
+`usb_stream_restarts`, which records stream restarts within a session.
+
+When Phase C diagnostics are enabled, routine sample-processing events
+are aggregated according to `phase_c_sample_summary_seconds`:
+
+- `1` (default): one-second sample-processing summaries.
+- `0`: individual sample-processing records.
+- Larger values: longer aggregation intervals.
+
+Processing errors and other RF diagnostic events remain individual
+records. Summaries retain sample counts, total sample bytes, latency
+totals and maximum latency and queue-depth measurements.
+
+Other diagnostic events can split aggregation intervals. The configured
+pre-trigger duration is a target, subject to the bounded event limit
+and actual receiver activity.
+
+Routine persistence writes at most one capture per persistence call.
+Graceful shutdown stops the radio and attempts to persist pending and
+active captures. Active captures finalized before their scheduled end
+are marked `incomplete`.
+
+Shutdown bypasses the normal retry delay, but evidence cannot be
+guaranteed to survive forced termination or unavailable storage.
+
+Periodic diagnostic summaries report capture write failures and
+dropped captures when the corresponding collectors are enabled.
+
+The shared capture storage budget and retention policies remain
+unchanged. Persistence remains synchronous on the consumer thread.
