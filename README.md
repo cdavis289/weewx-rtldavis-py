@@ -5,6 +5,13 @@ The driver supports EU, US and NZ frequency plans, separate wind transmitters,
 and leaf/soil and temperature/humidity stations. The receiver runs inside WeeWX
 and finds the dongle's frequency error by itself.
 
+The maintained Python fork has a published production driver release,
+[`v0.23.0-prod.1`](https://github.com/cdavis289/weewx-rtldavis-py/releases/tag/v0.23.0-prod.1).
+The corresponding [WeeWX Docker RTL-Davis image](https://github.com/cdavis289/weewx-docker/pkgs/container/weewx-rtldavis)
+bundles this driver and its native dependencies. The Docker repository publishes
+[`v5.6.0`](https://github.com/cdavis289/weewx-docker/releases/tag/v5.6.0)
+with WeeWX 5.6.0; the previous WeeWX 5.5.2-r3 image remains a separate release.
+
 This is an independent continuation of
 [lheijst/weewx-rtldavis](https://github.com/lheijst/weewx-rtldavis), with the
 Go receiver of [lheijst/rtldavis](https://github.com/lheijst/rtldavis) ported to
@@ -63,6 +70,39 @@ found and each transmitter once it is received:
 journalctl -u weewx -f
 ```
 
+## Using the maintained Docker image
+
+For a Docker-based receiver, use
+[`ghcr.io/cdavis289/weewx-rtldavis:5.6.0`](https://github.com/cdavis289/weewx-docker/pkgs/container/weewx-rtldavis)
+instead of installing the catalog package into the container. This image
+vendors the pinned fork version `v0.23.0-prod.1`, NumPy and RTL-SDR
+dependencies, and selected MQTT and Belchertown integrations.
+
+```yaml
+services:
+  weewx:
+    image: ghcr.io/cdavis289/weewx-rtldavis:5.6.0
+    restart: unless-stopped
+    stop_grace_period: 90s
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    volumes:
+      - ./data:/data
+```
+
+Create and configure `data/weewx.conf`, including the `[Rtldavis]`
+section, for your actual station and USB dongle. Set `device` to the
+dongle's serial number when multiple SDR receivers are attached. USB access,
+MQTT settings, report configuration and any host volume permissions remain
+the operator's responsibility. Back up `data/weewx.conf` and the archive
+database before changing image versions. A Docker image release and a
+standalone driver release are distinct version numbers; they should not be
+confused.
+
+See [Docker deployment and production maintenance](https://github.com/cdavis289/weewx-docker/blob/develop/docs/rtldavis-production.md)
+for image validation details. The standard WeeWX package installation
+instructions above remain applicable to non-Docker installations.
+
 ## Configuration
 
 `weectl station reconfigure` writes the `[Rtldavis]` section:
@@ -101,8 +141,12 @@ Use writable, persistent capture directories.
   frequency errors. The librtlsdr binding and the installation into WeeWX were
   checked against a stand-in library that plays recorded samples. This fork has also undergone controlled live US-band RF testing with a
   Davis Vantage Pro2. Phase C2 completed approximately six days without
-  synchronization loss. The subsequent production integration still
-  requires live validation; other hardware and bands remain unverified.
+  synchronization loss. The Python receiver subsequently passed production integration tests and
+  was deployed with WeeWX 5.5.2 on November 25, 2026. Live receiver
+  synchronization, MQTT publishing and new five-minute archive records were
+  observed after deployment. This is a validation of the tested US-band Davis
+  Vantage Pro2 setup, not a guarantee of reliability on other hardware or
+  frequency plans.
 - The first observations can take a while. Each of the five steps of the
   frequency search lasts 18 seconds in the EU band and 136 seconds in the US
   and NZ bands for an ISS on channel 1, up to 21 and 159 seconds on channel 8.
