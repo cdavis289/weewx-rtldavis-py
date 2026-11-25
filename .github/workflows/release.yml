@@ -1,29 +1,65 @@
 name: release
+
 on:
   push:
-    tags: ['v*']
+    tags:
+      - 'v*-prod.*'
+
 permissions:
-  contents: write
+  contents: read
+
 jobs:
   checks:
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
+
   release:
     needs: checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - run: python tools/package.py
-      - name: Verify release tag
+
+      - name: Validate production release tag
+        id: version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-        run: test -f "dist/weewx-rtldavis-${RELEASE_TAG#v}.zip"
-      - name: Publish extension archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          if [[ ! "${RELEASE_TAG}" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)-prod\.([1-9][0-9]*)$ ]]; then
+            echo "::error::Invalid production release tag"
+            exit 1
+          fi
+
+          version="${BASH_REMATCH[1]}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Build extension archive
+        run: python tools/package.py
+
+      - name: Verify release archive
+        env:
+          DRIVER_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test -f "dist/weewx-rtldavis-${DRIVER_VERSION}.zip"
+
+      - name: Publish production extension archive
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: gh release create "$RELEASE_TAG" "dist/weewx-rtldavis-${RELEASE_TAG#v}.zip" --title "$RELEASE_TAG" --notes-file CHANGELOG.md
+          DRIVER_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "$RELEASE_TAG" \
+            "dist/weewx-rtldavis-${DRIVER_VERSION}.zip" \
+            --verify-tag \
+            --title "$RELEASE_TAG" \
+            --notes-file CHANGELOG.md
