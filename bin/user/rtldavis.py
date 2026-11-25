@@ -805,6 +805,23 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         ]
         log.info('RF diagnostics radio max_queue_depth=%d',
                  max_queue_depth)
+        last_frame = receiver._last_frame
+        frame_age = (
+            round(max(0.0, now - last_frame), 3)
+            if last_frame is not None else None
+        )
+        log.info(
+            'RF health usb_mode=%s connected=%s syncing=%s '
+            'locked=%s frequency_offset_hz=%.1f '
+            'last_frame_age_seconds=%s frame_queue_depth=%d',
+            'synchronous' if self._radio._synchronous else 'asynchronous',
+            self._radio._dongle is not None,
+            getattr(receiver, '_syncing', None),
+            receiver.locked,
+            receiver.offset,
+            frame_age,
+            self._radio.frames.qsize(),
+        )
         demodulator = receiver._demodulator
         if demodulator is not None:
             sources.append(('demodulator', demodulator.diagnostic_counts))

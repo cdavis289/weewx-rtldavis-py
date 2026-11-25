@@ -862,11 +862,13 @@ class Radio(threading.Thread):
             'usb_dropped_blocks': 0,
             'usb_zero_blocks': 0,
             'usb_stream_restarts': 0,
+            'usb_reconnections': 0,
             'usb_tune_errors': 0,
             'max_queue_depth': 0,
         }
 
     def run(self):
+        connected_once = False
         try:
             while not self._stopping.is_set():
                 try:
@@ -877,6 +879,9 @@ class Radio(threading.Thread):
                     self._stopping.wait(self.RETRY)
                     continue
                 self._problem = (None, 0)
+                if connected_once:
+                    self.diagnostic_counts['usb_reconnections'] += 1
+                connected_once = True
                 try:
                     self._run_dongle(self._dongle)
                 except OSError as e:

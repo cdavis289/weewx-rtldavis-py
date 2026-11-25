@@ -14,6 +14,7 @@ def test_radio_counters_without_ab():
         "usb_dropped_blocks": 0,
         "usb_zero_blocks": 0,
         "usb_stream_restarts": 0,
+        "usb_reconnections": 0,
         "usb_tune_errors": 0,
         "max_queue_depth": 0,
     }
@@ -68,6 +69,9 @@ def test_radio_summary_reports_deltas_and_high_water_mark(caplog):
 
     assert "'usb_dropped_blocks': 4" in caplog.text
     assert "max_queue_depth=12" in caplog.text
+    assert "usb_mode=asynchronous" in caplog.text
+    assert "last_frame_age_seconds=None" in caplog.text
+    assert "connected=False" in caplog.text
     assert "max_queue_depth" not in (
         driver._diagnostic_summary_previous["radio"]
     )
@@ -81,3 +85,28 @@ def test_radio_summary_reports_deltas_and_high_water_mark(caplog):
 
     assert "'usb_dropped_blocks': 3" in caplog.text
     assert "max_queue_depth=12" in caplog.text
+
+
+def test_successful_usb_reconnection(monkeypatch):
+    from user import rtldavis_receiver as module
+
+    radio = Radio(Receiver("US", [7]))
+    sessions = []
+
+    monkeypatch.setattr(module, "load_numpy", lambda: None)
+    monkeypatch.setattr(module, "RtlSdr", lambda device: object())
+    monkeypatch.setattr(radio._stopping, "wait", lambda seconds: False)
+
+    def run_session(dongle):
+        sessions.append(dongle)
+        if len(sessions) == 2:
+            radio._stopping.set()
+
+    monkeypatch.setattr(radio, "_run_dongle", run_session)
+
+    radio.run()
+
+    assert radio.failure is None
+    assert len(sessions) == 2
+    assert radio.diagnostic_counts["usb_reconnections"] == 1
+    assert radio.diagnostic_counts["usb_stream_restarts"] == 0
