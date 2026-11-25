@@ -184,20 +184,27 @@ class GustDiagnostics:
 
     def flush(self):
         """Persist completed and incomplete captures on shutdown."""
+        if self.active is not None:
+            now = float(self.clock())
+            self.active["incomplete"] = now < self.active["until"]
+            self.active["finalized_timestamp"] = now
         self._queue_active()
-        self._persist_pending()
+        self._persist_pending(force=True, max_captures=None)
 
-    def _persist_pending(self):
-        if time.monotonic() < self._retry_at:
+    def _persist_pending(self, force=False, max_captures=1):
+        if not force and time.monotonic() < self._retry_at:
             return
 
-        while self.pending:
+        written = 0
+        while self.pending and (
+                max_captures is None or written < max_captures):
             if not self._write(self.pending[0]):
                 self._retry_at = (
                     time.monotonic() + self.retry_seconds)
                 break
 
             self.pending.popleft()
+            written += 1
             self._retry_at = 0.0
 
     def _write(self, capture):

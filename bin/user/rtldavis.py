@@ -563,6 +563,7 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             1, int(stn_dict.get('diagnostic_write_retry_seconds', 30)))
         self._diagnostic_cleanup_next = 0.0
         self._phase_c_retry_at = 0.0
+        self._phase_c_write_failures = 0
 
         self._diagnostic_storage_groups = []
 
@@ -770,9 +771,20 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         self._reset_stats()  # save current stats in last stats
 
     def closePort(self):
-        if self._gust_diagnostics is not None:
-            self._gust_diagnostics.flush()
-        self._radio.stop()
+        try:
+            self._radio.stop()
+        finally:
+            try:
+                if self._gust_diagnostics is not None:
+                    self._gust_diagnostics.flush()
+            except Exception:
+                log.exception("Gust diagnostic shutdown flush failed")
+            try:
+                if self._phase_c_diagnostics is not None:
+                    self._phase_c_diagnostics.finalize()
+                    self._maybe_write_phase_c_captures(shutdown=True)
+            except Exception:
+                log.exception("Phase C diagnostic shutdown flush failed")
 
     @property
     def hardware_name(self):
@@ -829,7 +841,21 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             sources.append(('demodulator', demodulator.diagnostic_counts))
         if self._frame_diagnostics is not None:
             sources.append(('frame', self._frame_diagnostics.counts))
+        phase = getattr(self, "_phase_c_diagnostics", None)
+        if phase is not None:
+            sources.append(("phase_c_storage", {
+                "dropped_captures": phase.dropped_captures,
+                "write_failures": getattr(
+                    self, "_phase_c_write_failures", 0),
+            }))
+        gust = getattr(self, "_gust_diagnostics", None)
+        if gust is not None:
+            sources.append(("gust_storage", {
+                "dropped_captures": gust.dropped_captures,
+                "write_failures": gust.write_failures,
+            }))
         for label, counts in sources:
+            counts = dict(counts)
             previous = self._diagnostic_summary_previous.get(label, {})
             delta = {key: value - previous.get(key, 0)
                      for key, value in counts.items()}
@@ -871,20 +897,23 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
 
         self._prune_diagnostic_storage()
 
-    def _maybe_write_phase_c_captures(self):
+    def _maybe_write_phase_c_captures(self, shutdown=False):
         """Persist completed Phase C captures on the WeeWX loop thread."""
         if self._phase_c_diagnostics is None:
             return
-        if time.monotonic() < self._phase_c_retry_at:
+        if not shutdown and time.monotonic() < self._phase_c_retry_at:
             return
         try:
             from user.rtldavis_phase_c_diagnostics import persist_captures
             for path in persist_captures(self._phase_c_diagnostics,
                                          self._phase_c_path,
                                          max_files=self._phase_c_max_files,
-                                         retention_callback=self._prune_diagnostic_storage):
+                                         retention_callback=self._prune_diagnostic_storage,
+                                         max_captures=None if shutdown else 1):
                 log.info("Phase C capture saved: %s", path)
         except Exception:
+            self._phase_c_write_failures = (
+                getattr(self, "_phase_c_write_failures", 0) + 1)
             self._phase_c_retry_at = (
                 time.monotonic() + self._diagnostic_write_retry_seconds)
             log.exception("Phase C capture persistence failed")

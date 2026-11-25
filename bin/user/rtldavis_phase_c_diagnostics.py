@@ -126,6 +126,17 @@ class PhaseCDiagnostics:
                 self._queue_completed()
             return self._pending[0] if self._pending else None
 
+    def finalize(self, timestamp=None):
+        """Finalize any active capture during graceful shutdown."""
+        now = self.clock() if timestamp is None else float(timestamp)
+        with self._lock:
+            if self._active is not None:
+                self._active["incomplete"] = (
+                    now < self._active["end_monotonic"])
+                self._active["finalized_monotonic"] = now
+                self._flush_sample_summary()
+                self._queue_completed()
+
     def acknowledge(self, capture):
         """Remove a successfully saved capture, if it is still queued."""
         with self._lock:
@@ -203,7 +214,8 @@ def observe_sample_processing(diagnostics, feed, data, arrival,
 
 
 def persist_captures(diagnostics, directory, timestamp=None,
-                     max_files=100, retention_callback=None):
+                     max_files=100, retention_callback=None,
+                     max_captures=None):
     """Persist queued captures on the WeeWX loop thread, then acknowledge.
 
     Failed writes remain queued for retry. Producer never performs disk I/O.
@@ -220,7 +232,7 @@ def persist_captures(diagnostics, directory, timestamp=None,
     destination = Path(directory)
     paths = []
     first = True
-    while True:
+    while max_captures is None or len(paths) < max_captures:
         capture = diagnostics.peek_pending(timestamp=timestamp if first else None)
         first = False
         if capture is None:
