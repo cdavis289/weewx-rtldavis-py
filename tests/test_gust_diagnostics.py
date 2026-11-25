@@ -74,3 +74,149 @@ def test_idle_tick_finalizes_without_new_frames(tmp_path):
     assert not list(tmp_path.glob("gust-*.json"))
     diag.tick(161)
     assert len(list(tmp_path.glob("gust-*.json"))) == 1
+
+
+def test_history_is_count_bounded(tmp_path):
+    diag = GustDiagnostics(
+        tmp_path, before_seconds=300, max_frames=5)
+
+    for i in range(20):
+        diag.observe(bytes([i]), timestamp=i)
+
+    assert len(diag.history) == 5
+    assert diag.history[0]["timestamp"] == 15
+
+
+def test_capture_frames_are_bounded(tmp_path):
+    diag = GustDiagnostics(
+        tmp_path, max_frames=3, after_seconds=60)
+
+    diag.observe(b"before", timestamp=10)
+    assert diag.check(70, timestamp=11)
+
+    for i in range(10):
+        diag.observe(bytes([i]), timestamp=12 + i)
+
+    diag.flush()
+
+    saved = json.loads(
+        next(tmp_path.glob("gust-*.json")).read_text())
+
+    assert len(saved["frames"]) == 3
+    assert saved["truncated_frames"] == 8
+
+
+def test_repeated_triggers_have_hard_deadline(tmp_path):
+    diag = GustDiagnostics(
+        tmp_path, after_seconds=60,
+        max_capture_seconds=180)
+
+    assert diag.check(70, timestamp=100)
+
+    for timestamp in (150, 200, 250):
+        assert diag.check(80, timestamp=timestamp)
+
+    assert diag.active["until"] == 280
+
+    diag.tick(281)
+
+    assert diag.active is None
+    assert len(list(tmp_path.glob("gust-*.json"))) == 1
+
+
+def test_anomaly_events_are_bounded(tmp_path):
+    diag = GustDiagnostics(
+        tmp_path, after_seconds=60, max_events=3)
+
+    for i in range(10):
+        assert diag.check(70 + i, timestamp=100 + i)
+
+    diag.flush()
+
+    saved = json.loads(
+        next(tmp_path.glob("gust-*.json")).read_text())
+
+    assert len(saved["events"]) == 3
+    assert saved["truncated_events"] == 7
+    assert saved["gust_mph"] == 79
+
+
+def test_failed_writes_are_retained_for_retry(tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")
+
+    diag = GustDiagnostics(blocked, after_seconds=0)
+
+    assert diag.check(70, timestamp=100)
+    assert len(diag.pending) == 1
+    assert diag.write_failures >= 1
+
+    blocked.unlink()
+    blocked.mkdir()
+
+    diag.tick(101)
+
+    assert len(diag.pending) == 0
+    assert len(list(blocked.glob("gust-*.json"))) == 1
+
+
+def test_failed_write_queue_is_bounded(tmp_path):
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")
+
+    diag = GustDiagnostics(
+        blocked, after_seconds=0, max_pending=2)
+
+    for i in range(5):
+        assert diag.check(70, timestamp=100 + i)
+
+    assert len(diag.pending) == 2
+    assert diag.dropped_captures == 3
+
+
+def test_atomic_write_failure_leaves_no_partial_capture(
+        tmp_path, monkeypatch):
+    import user.rtldavis_gust_diagnostics as gust_module
+
+    original_replace = gust_module.os.replace
+
+    def fail_replace(*args, **kwargs):
+        raise OSError("simulated atomic replacement failure")
+
+    monkeypatch.setattr(
+        gust_module.os, "replace", fail_replace)
+
+    diag = GustDiagnostics(tmp_path, after_seconds=0)
+    assert diag.check(70, timestamp=100)
+
+    assert len(diag.pending) == 1
+    assert not list(tmp_path.glob("gust-*.json"))
+    assert not list(tmp_path.glob(".gust-*.tmp"))
+
+    monkeypatch.setattr(
+        gust_module.os, "replace", original_replace)
+
+    diag.tick(101)
+
+    assert len(diag.pending) == 0
+    assert len(list(tmp_path.glob("gust-*.json"))) == 1
+
+
+def test_retention_preserves_unrelated_files(tmp_path):
+    unrelated = tmp_path / "gust-manual.json"
+    unrelated.write_text("preserve")
+
+    diag = GustDiagnostics(
+        tmp_path, after_seconds=0, max_files=1)
+
+    assert diag.check(70, timestamp=100)
+    assert diag.check(80, timestamp=101)
+
+    assert unrelated.read_text() == "preserve"
+
+    generated = [
+        path for path in tmp_path.glob("gust-*.json")
+        if path != unrelated
+    ]
+
+    assert len(generated) == 1
