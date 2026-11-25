@@ -21,5 +21,6 @@ class RtldavisInstaller(ExtensionInstaller):
                                  'bin/user/rtldavis_gust_diagnostics.py',
                                  'bin/user/rtldavis_frame_diagnostics.py',
                                  'bin/user/rtldavis_phase_c_diagnostics.py',
+                                 'bin/user/rtldavis_diagnostic_storage.py',
                                  'bin/user/rtldavis_wind_validation.py'])]
         )
