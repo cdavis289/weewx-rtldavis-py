@@ -10,7 +10,8 @@ import time
 
 class PhaseCDiagnostics:
     def __init__(self, before_seconds=60, after_seconds=60,
-                 max_events=4096, max_pending=8, clock=None):
+                 max_events=4096, max_pending=8, clock=None,
+                 sample_summary_seconds=0):
         self.before_seconds = max(0.0, float(before_seconds))
         self.after_seconds = max(0.0, float(after_seconds))
         self.max_events = max(1, int(max_events))
@@ -19,6 +20,8 @@ class PhaseCDiagnostics:
         self._lock = threading.Lock()
         self._history = deque(maxlen=self.max_events)
         self._active = None
+        self.sample_summary_seconds = max(0.0, float(sample_summary_seconds))
+        self._sample_summary = None
         self._pending = deque(maxlen=self.max_pending)
         self.dropped_captures = 0
 
@@ -27,27 +30,69 @@ class PhaseCDiagnostics:
             return
         if len(self._pending) == self.max_pending:
             self.dropped_captures += 1
+        self._active["events"] = list(self._active["events"])
         self._pending.append(self._active)
         self._active = None
+
+    def _record(self, item):
+        """Append a completed record while holding the producer lock."""
+        now = item["monotonic"]
+        self._history.append(item)
+        cutoff = now - self.before_seconds
+        while self._history and self._history[0]["monotonic"] < cutoff:
+            self._history.popleft()
+        if self._active is not None:
+            if now <= self._active["end_monotonic"]:
+                events = self._active["events"]
+                if len(events) == self.max_events:
+                    self._active["truncated_events"] += 1
+                events.append(item)
+            else:
+                self._queue_completed()
+
+    def _flush_sample_summary(self):
+        if self._sample_summary is not None:
+            self._record(self._sample_summary)
+            self._sample_summary = None
+
+    def _summarize_sample(self, item):
+        now = item["monotonic"]
+        summary = self._sample_summary
+        if summary is not None and (
+                now - summary["start_monotonic"] >= self.sample_summary_seconds
+                or (self._active is not None and
+                    now > self._active["end_monotonic"])):
+            self._flush_sample_summary()
+            summary = None
+        if summary is None:
+            summary = {"event": "sample_processing_summary",
+                       "start_monotonic": now, "count": 0,
+                       "sample_bytes": 0}
+            self._sample_summary = summary
+        summary["monotonic"] = now
+        summary["count"] += 1
+        summary["sample_bytes"] += item["sample_bytes"]
+        for key in ("queue_wait_ms", "demod_duration_ms",
+                    "completion_age_ms", "queue_depth"):
+            value = item.get(key)
+            if value is not None:
+                maximum = "max_" + key
+                summary[maximum] = max(summary.get(maximum, value), value)
+                if key != "queue_depth":
+                    total = "sum_" + key
+                    summary[total] = summary.get(total, 0.0) + value
 
     def observe(self, event, timestamp=None, **fields):
         """Record one passive event; no disk I/O or receiver mutations."""
         now = self.clock() if timestamp is None else float(timestamp)
         item = {"monotonic": now, "event": str(event), **fields}
         with self._lock:
-            self._history.append(item)
-            cutoff = now - self.before_seconds
-            while self._history and self._history[0]["monotonic"] < cutoff:
-                self._history.popleft()
-            if self._active is not None:
-                if now <= self._active["end_monotonic"]:
-                    events = self._active["events"]
-                    if len(events) >= self.max_events:
-                        events.pop(0)
-                        self._active["truncated_events"] += 1
-                    events.append(item)
-                else:
-                    self._queue_completed()
+            if (event == "sample_processing" and self.sample_summary_seconds
+                    and not fields.get("error")):
+                self._summarize_sample(item)
+            else:
+                self._flush_sample_summary()
+                self._record(item)
         return item
 
     def trigger(self, reason, timestamp=None, **fields):
@@ -56,14 +101,16 @@ class PhaseCDiagnostics:
         with self._lock:
             if self._active is not None:
                 return False
+            self._flush_sample_summary()
             start = now - self.before_seconds
             self._active = {
                 "reason": str(reason), "trigger_monotonic": now,
                 "end_monotonic": now + self.after_seconds,
                 "trigger_fields": dict(fields),
                 "truncated_events": 0,
-                "events": [dict(item) for item in self._history
-                           if start <= item["monotonic"] <= now],
+                "events": deque((dict(item) for item in self._history
+                                 if start <= item["monotonic"] <= now),
+                                maxlen=self.max_events),
             }
             return True
 
@@ -75,6 +122,7 @@ class PhaseCDiagnostics:
         now = self.clock() if timestamp is None else float(timestamp)
         with self._lock:
             if self._active is not None and now >= self._active["end_monotonic"]:
+                self._flush_sample_summary()
                 self._queue_completed()
             return self._pending[0] if self._pending else None
 
@@ -92,6 +140,7 @@ class PhaseCDiagnostics:
         now = self.clock() if timestamp is None else float(timestamp)
         with self._lock:
             if self._active is not None and now >= self._active["end_monotonic"]:
+                self._flush_sample_summary()
                 self._queue_completed()
             result = list(self._pending)
             self._pending.clear()

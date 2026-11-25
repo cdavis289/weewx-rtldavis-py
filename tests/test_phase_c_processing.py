@@ -56,3 +56,39 @@ def test_processing_diagnostics_do_not_require_usb_hardware():
     receiver = Receiver("US", [7])
     radio = Radio(receiver)
     assert receiver.phase_c_diagnostics is None
+
+
+
+def test_sample_summary_retains_history_and_maxima():
+    diag = PhaseCDiagnostics(before_seconds=180, max_events=20000,
+                             sample_summary_seconds=1)
+    for i in range(30000):
+        diag.observe("sample_processing", timestamp=i / 200,
+                     sample_bytes=16, queue_wait_ms=i % 7,
+                     demod_duration_ms=2, completion_age_ms=9,
+                     queue_depth=i % 4, error=None)
+    diag.trigger("test", timestamp=150)
+    records = diag.drain(timestamp=210)[0]["events"]
+    assert len(records) == 150
+    assert sum(r["count"] for r in records) == 30000
+    assert max(r["max_queue_wait_ms"] for r in records) == 6
+    assert max(r["max_queue_depth"] for r in records) == 3
+    assert sum(r["sample_bytes"] for r in records) == 480000
+
+
+def test_sample_summary_preserves_errors_and_capture_boundary():
+    diag = PhaseCDiagnostics(after_seconds=1, sample_summary_seconds=1)
+    fields = dict(sample_bytes=16, queue_wait_ms=1, demod_duration_ms=2,
+                  completion_age_ms=3, queue_depth=1)
+    diag.observe("sample_processing", timestamp=0, **fields)
+    diag.trigger("test", timestamp=0.5)
+    diag.observe("sample_processing", timestamp=1, **fields)
+    diag.observe("sample_processing", timestamp=1.1, error="RuntimeError", **fields)
+    diag.observe("sample_processing", timestamp=1.2, **fields)
+    diag.observe("sample_processing", timestamp=1.6, **fields)
+    records = diag.drain(timestamp=2)[0]["events"]
+    assert [r["event"] for r in records] == [
+        "sample_processing_summary", "sample_processing_summary",
+        "sample_processing", "sample_processing_summary"]
+    assert records[2]["error"] == "RuntimeError"
+    assert records[-1]["monotonic"] == 1.2

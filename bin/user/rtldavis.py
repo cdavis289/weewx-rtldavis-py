@@ -546,7 +546,9 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                 before_seconds=float(stn_dict.get("phase_c_before_seconds", 180)),
                 after_seconds=float(stn_dict.get("phase_c_after_seconds", 60)),
                 max_events=int(stn_dict.get("phase_c_max_events", 20000)),
-                max_pending=int(stn_dict.get("phase_c_max_pending", 8)))
+                max_pending=int(stn_dict.get("phase_c_max_pending", 8)),
+                sample_summary_seconds=float(stn_dict.get(
+                    "phase_c_sample_summary_seconds", 1)))
             self._phase_c_path = stn_dict.get(
                 "phase_c_diagnostics_path", "/data/phase-c-diagnostics")
             self._phase_c_max_files = max(1, int(stn_dict.get(
