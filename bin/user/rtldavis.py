@@ -43,6 +43,7 @@ from weeutil.weeutil import tobool
 
 import user.rtldavis_receiver
 from user.rtldavis_gust_diagnostics import GustDiagnostics
+from user.rtldavis_diagnostic_storage import prune_captures
 from user.rtldavis_frame_diagnostics import FrameDiagnostics
 from user.rtldavis_wind_validation import WindHistory
 
@@ -490,7 +491,14 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
                 ratio_minimum_mph=stn_dict.get('gust_ratio_minimum_mph', 25),
                 before_seconds=stn_dict.get('gust_capture_before_seconds', 300),
                 after_seconds=stn_dict.get('gust_capture_after_seconds', 60),
-                max_files=stn_dict.get('gust_diagnostics_max_files', 100))
+                max_files=stn_dict.get('gust_diagnostics_max_files', 100),
+                max_frames=stn_dict.get('gust_capture_max_frames', 4096),
+                max_events=stn_dict.get('gust_capture_max_events', 128),
+                max_pending=stn_dict.get('gust_capture_max_pending', 8),
+                max_capture_seconds=stn_dict.get(
+                    'gust_capture_max_seconds', 180),
+                retry_seconds=stn_dict.get(
+                    'diagnostic_write_retry_seconds', 30))
         self._sensor_map = stn_dict.get('sensor_map', {})
         loginf('sensor map is %s' % self._sensor_map)
         self.device = str(stn_dict.get('device', '0'))
@@ -535,15 +543,44 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
         if tobool(stn_dict.get("phase_c_diagnostics_enabled", False)):
             from user.rtldavis_phase_c_diagnostics import PhaseCDiagnostics
             self._phase_c_diagnostics = PhaseCDiagnostics(
-                before_seconds=float(stn_dict.get("phase_c_before_seconds", 60)),
+                before_seconds=float(stn_dict.get("phase_c_before_seconds", 180)),
                 after_seconds=float(stn_dict.get("phase_c_after_seconds", 60)),
-                max_events=int(stn_dict.get("phase_c_max_events", 4096)),
+                max_events=int(stn_dict.get("phase_c_max_events", 20000)),
                 max_pending=int(stn_dict.get("phase_c_max_pending", 8)))
             self._phase_c_path = stn_dict.get(
                 "phase_c_diagnostics_path", "/data/phase-c-diagnostics")
             self._phase_c_max_files = max(1, int(stn_dict.get(
                 "phase_c_max_files", 100)))
             receiver.phase_c_diagnostics = self._phase_c_diagnostics
+        self._diagnostic_storage_max_bytes = max(
+            0, int(stn_dict.get(
+                'diagnostic_storage_max_bytes', 50 * 1024 * 1024)))
+        self._diagnostic_cleanup_seconds = max(
+            1, int(stn_dict.get('diagnostic_cleanup_seconds', 300)))
+        self._diagnostic_write_retry_seconds = max(
+            1, int(stn_dict.get('diagnostic_write_retry_seconds', 30)))
+        self._diagnostic_cleanup_next = 0.0
+        self._phase_c_retry_at = 0.0
+
+        self._diagnostic_storage_groups = []
+
+        if self._gust_diagnostics is not None:
+            self._diagnostic_storage_groups.append((
+                self._gust_diagnostics.directory,
+                'gust',
+                self._gust_diagnostics.max_files))
+            self._gust_diagnostics.retention_callback = (
+                self._prune_diagnostic_storage)
+
+        if self._phase_c_diagnostics is not None:
+            self._diagnostic_storage_groups.append((
+                self._phase_c_path,
+                'phase_c',
+                self._phase_c_max_files))
+
+        # Clean existing captures before starting the radio.
+        self._maybe_prune_diagnostic_storage()
+
         self._diagnostic_summary_seconds = max(1, int(stn_dict.get(
             'diagnostic_summary_seconds', 300))) if tobool(stn_dict.get(
             'diagnostic_summary_enabled', False)) else None
@@ -781,17 +818,56 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             log.info('RF diagnostics %s interval=%ds counters=%s',
                      label, self._diagnostic_summary_seconds, delta)
 
+    def _prune_diagnostic_storage(self):
+        if not self._diagnostic_storage_groups:
+            return
+
+        try:
+            result = prune_captures(
+                self._diagnostic_storage_groups,
+                max_bytes=self._diagnostic_storage_max_bytes)
+
+            if result['removed_files']:
+                log.info(
+                    "Diagnostic retention removed=%d bytes=%d "
+                    "retained=%d retained_bytes=%d",
+                    result['removed_files'],
+                    result['removed_bytes'],
+                    result['retained_files'],
+                    result['retained_bytes'])
+        except OSError:
+            log.exception("Diagnostic storage cleanup failed")
+
+    def _maybe_prune_diagnostic_storage(self):
+        if not self._diagnostic_storage_groups:
+            return
+
+        now = time.monotonic()
+
+        if now < self._diagnostic_cleanup_next:
+            return
+
+        self._diagnostic_cleanup_next = (
+            now + self._diagnostic_cleanup_seconds)
+
+        self._prune_diagnostic_storage()
+
     def _maybe_write_phase_c_captures(self):
         """Persist completed Phase C captures on the WeeWX loop thread."""
         if self._phase_c_diagnostics is None:
+            return
+        if time.monotonic() < self._phase_c_retry_at:
             return
         try:
             from user.rtldavis_phase_c_diagnostics import persist_captures
             for path in persist_captures(self._phase_c_diagnostics,
                                          self._phase_c_path,
-                                         max_files=self._phase_c_max_files):
+                                         max_files=self._phase_c_max_files,
+                                         retention_callback=self._prune_diagnostic_storage):
                 log.info("Phase C capture saved: %s", path)
         except Exception:
+            self._phase_c_retry_at = (
+                time.monotonic() + self._diagnostic_write_retry_seconds)
             log.exception("Phase C capture persistence failed")
 
     def genLoopPackets(self):
@@ -816,6 +892,7 @@ class RtldavisDriver(weewx.drivers.AbstractDevice, weewx.engine.StdService):
             self._maybe_log_diagnostic_summary()
             self._maybe_log_wind_summary()
             self._maybe_write_phase_c_captures()
+            self._maybe_prune_diagnostic_storage()
             if self._radio.failure is not None:
                 raise weewx.WeeWxIOError("receiver failed: %s" % self._radio.failure)
             try:

@@ -153,7 +153,8 @@ def observe_sample_processing(diagnostics, feed, data, arrival,
             error=error)
 
 
-def persist_captures(diagnostics, directory, timestamp=None, max_files=100):
+def persist_captures(diagnostics, directory, timestamp=None,
+                     max_files=100, retention_callback=None):
     """Persist queued captures on the WeeWX loop thread, then acknowledge.
 
     Failed writes remain queued for retry. Producer never performs disk I/O.
@@ -161,7 +162,7 @@ def persist_captures(diagnostics, directory, timestamp=None, max_files=100):
     """
     import json
     import os
-    import re
+    from user.rtldavis_diagnostic_storage import prune_captures
     import tempfile
     import uuid
     from pathlib import Path
@@ -199,12 +200,13 @@ def persist_captures(diagnostics, directory, timestamp=None, max_files=100):
         diagnostics.acknowledge(capture)
         paths.append(target)
 
-    # Prune only after successful writes. Never touch other JSON or temp files.
-    if paths:
-        pattern = re.compile(r'^phase-c-\d{8}T\d{6}Z-[0-9a-f]{12,32}\.json$')
-        candidates = sorted(
-            (p for p in destination.iterdir() if p.is_file() and pattern.fullmatch(p.name)),
-            key=lambda p: (p.stat().st_mtime_ns, p.name), reverse=True)
-        for old in candidates[limit:]:
-            old.unlink()
+        # Apply retention after every successful write, including
+        # when a later capture in the queue fails to persist.
+        if retention_callback is not None:
+            retention_callback()
+        else:
+            prune_captures([
+                (destination, "phase_c", limit),
+            ])
+
     return paths

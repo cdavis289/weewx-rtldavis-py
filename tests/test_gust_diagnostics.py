@@ -145,7 +145,7 @@ def test_failed_writes_are_retained_for_retry(tmp_path):
     blocked = tmp_path / "blocked"
     blocked.write_text("not a directory")
 
-    diag = GustDiagnostics(blocked, after_seconds=0)
+    diag = GustDiagnostics(blocked, after_seconds=0, retry_seconds=0)
 
     assert diag.check(70, timestamp=100)
     assert len(diag.pending) == 1
@@ -186,7 +186,7 @@ def test_atomic_write_failure_leaves_no_partial_capture(
     monkeypatch.setattr(
         gust_module.os, "replace", fail_replace)
 
-    diag = GustDiagnostics(tmp_path, after_seconds=0)
+    diag = GustDiagnostics(tmp_path, after_seconds=0, retry_seconds=0)
     assert diag.check(70, timestamp=100)
 
     assert len(diag.pending) == 1
@@ -220,3 +220,38 @@ def test_retention_preserves_unrelated_files(tmp_path):
     ]
 
     assert len(generated) == 1
+
+
+def test_failed_write_retry_is_throttled(
+        tmp_path, monkeypatch):
+    import user.rtldavis_gust_diagnostics as gust_module
+
+    blocked = tmp_path / "blocked"
+    blocked.write_text("not a directory")
+
+    now = [100.0]
+
+    monkeypatch.setattr(
+        gust_module.time, "monotonic",
+        lambda: now[0])
+
+    diag = GustDiagnostics(
+        blocked, after_seconds=0, retry_seconds=30)
+
+    assert diag.check(70, timestamp=100)
+    assert diag.write_failures == 1
+
+    now[0] = 129
+    diag.tick(129)
+
+    assert diag.write_failures == 1
+    assert len(diag.pending) == 1
+
+    blocked.unlink()
+    blocked.mkdir()
+
+    now[0] = 130
+    diag.tick(130)
+
+    assert len(diag.pending) == 0
+    assert len(list(blocked.glob("gust-*.json"))) == 1

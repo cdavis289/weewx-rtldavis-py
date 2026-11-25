@@ -24,7 +24,8 @@ class GustDiagnostics:
                  ratio_minimum_mph=25.0, before_seconds=300,
                  after_seconds=60, max_files=100, clock=None,
                  max_frames=4096, max_events=128, max_pending=8,
-                 max_capture_seconds=180):
+                 max_capture_seconds=180,
+                 retention_callback=None, retry_seconds=30):
         self.directory = Path(directory)
         self.absolute_mph = float(absolute_mph)
         self.ratio = float(ratio)
@@ -44,6 +45,9 @@ class GustDiagnostics:
         self.active = None
         self.dropped_captures = 0
         self.write_failures = 0
+        self.retention_callback = retention_callback
+        self.retry_seconds = max(0.0, float(retry_seconds))
+        self._retry_at = 0.0
 
     def _queue_active(self):
         if self.active is None:
@@ -184,11 +188,17 @@ class GustDiagnostics:
         self._persist_pending()
 
     def _persist_pending(self):
+        if time.monotonic() < self._retry_at:
+            return
+
         while self.pending:
             if not self._write(self.pending[0]):
+                self._retry_at = (
+                    time.monotonic() + self.retry_seconds)
                 break
 
             self.pending.popleft()
+            self._retry_at = 0.0
 
     def _write(self, capture):
         """Atomically persist one capture; retain it on write failure."""
@@ -250,9 +260,12 @@ class GustDiagnostics:
         # A retention failure must not cause a successfully saved
         # capture to be written again.
         try:
-            prune_captures([
-                (self.directory, "gust", self.max_files),
-            ])
+            if self.retention_callback is not None:
+                self.retention_callback()
+            else:
+                prune_captures([
+                    (self.directory, "gust", self.max_files),
+                ])
         except OSError:
             LOG.exception("Unable to prune gust diagnostic captures")
 
