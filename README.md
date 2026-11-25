@@ -15,7 +15,7 @@ with WeeWX 5.6.0; the previous WeeWX 5.5.2-r3 image remains a separate release.
 This is an independent continuation of
 [lheijst/weewx-rtldavis](https://github.com/lheijst/weewx-rtldavis), with the
 Go receiver of [lheijst/rtldavis](https://github.com/lheijst/rtldavis) ported to
-Python. Report problems in [this issue tracker](https://github.com/weewx-packages/weewx-rtldavis/issues).
+Python. For issues specific to this maintained fork, use [its issue tracker](https://github.com/cdavis289/weewx-rtldavis-py/issues).
 
 ## Requirements
 
@@ -39,13 +39,16 @@ dongle from it.
 
 ## Installation
 
-Install `rtldavis` from the [WeeWX packages catalog](https://github.com/weewx-packages/catalog/blob/main/packages/rtldavis.md).
-The catalog page lists the current release, its WeeWX and Python
-requirements, and the install, update and removal commands.
+For the maintained fork's production driver, use the
+[GitHub release](https://github.com/cdavis289/weewx-rtldavis-py/releases/tag/v0.23.0-prod.1)
+or build the extension archive from the matching source revision with
+`python tools/package.py`. Install the resulting extension archive using
+`weectl extension install` for your WeeWX installation.
 
-For fork-specific changes, build the extension from the desired fork
-revision with `python tools/package.py`. The upstream catalog release
-does not include these fork-specific changes.
+The separate [WeeWX packages catalog](https://github.com/weewx-packages/catalog/blob/main/packages/rtldavis.md)
+documents the **upstream** package, not this fork's production receiver and
+diagnostic changes. The published RTL-Davis Docker image already includes
+this maintained driver; do not install a competing catalog copy over it.
 
 Then select the driver. It asks for the frequency band, the ISS channel and
 the rain bucket:
@@ -139,10 +142,11 @@ Use writable, persistent capture directories.
 
 - Tests cover recorded problem frames and simulated transmitters with
   frequency errors. The librtlsdr binding and the installation into WeeWX were
-  checked against a stand-in library that plays recorded samples. This fork has also undergone controlled live US-band RF testing with a
-  Davis Vantage Pro2. Phase C2 completed approximately six days without
-  synchronization loss. The Python receiver subsequently passed production integration tests and
-  was deployed with WeeWX 5.5.2 on November 25, 2026. Live receiver
+  checked against a stand-in library that plays recorded samples. This fork
+  has also undergone controlled live US-band RF testing with a Davis Vantage
+  Pro2. Phase C2 completed approximately six days without synchronization
+  loss. The Python receiver subsequently passed production integration tests
+  and was deployed with WeeWX 5.5.2 on November 25, 2026. Live receiver
   synchronization, MQTT publishing and new five-minute archive records were
   observed after deployment. This is a validation of the tested US-band Davis
   Vantage Pro2 setup, not a guarantee of reliability on other hardware or
