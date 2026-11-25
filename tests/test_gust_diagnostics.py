@@ -255,3 +255,45 @@ def test_failed_write_retry_is_throttled(
 
     assert len(diag.pending) == 0
     assert len(list(blocked.glob("gust-*.json"))) == 1
+
+
+def test_fractional_average_preserves_ratio_threshold(tmp_path):
+    diag = GustDiagnostics(tmp_path, after_seconds=0)
+
+    # 25 / 5.0625 is below the 5x threshold.
+    assert not diag.check(25.0, 5.0625, timestamp=100)
+
+    # 25 / 4.9375 is above the 5x threshold.
+    assert diag.check(25.0, 4.9375, timestamp=101)
+
+    saved = json.loads(
+        next(tmp_path.glob("gust-*.json")).read_text())
+
+    assert saved["average_mph"] == 4.9375
+    assert saved["reasons"] == ["ratio"]
+
+
+def test_fractional_gust_preserves_absolute_threshold(tmp_path):
+    diag = GustDiagnostics(tmp_path, after_seconds=0)
+
+    assert not diag.check(49.9375, timestamp=100)
+    assert diag.check(50.0625, timestamp=101)
+
+    saved = json.loads(
+        next(tmp_path.glob("gust-*.json")).read_text())
+
+    assert saved["gust_mph"] == 50.0625
+    assert saved["reasons"] == ["absolute"]
+
+
+def test_fractional_gust_preserves_ratio_minimum(tmp_path):
+    diag = GustDiagnostics(tmp_path, after_seconds=0)
+
+    assert not diag.check(24.9375, 1.0, timestamp=100)
+    assert diag.check(25.0625, 1.0, timestamp=101)
+
+    saved = json.loads(
+        next(tmp_path.glob("gust-*.json")).read_text())
+
+    assert saved["gust_mph"] == 25.0625
+    assert saved["reasons"] == ["ratio"]
