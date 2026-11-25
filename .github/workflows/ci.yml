@@ -13,8 +13,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ['3.10', '3.12', '3.14']
-        weewx: ['5.0.2', '5.5.2']
+        python: ['3.14']
+        weewx: ['5.5.2', '5.6.0']
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
