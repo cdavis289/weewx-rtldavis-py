@@ -108,3 +108,14 @@ and hardware verification. General elimination of every isolated corrupt reading
 is also unverified. See docs/troubleshooting.md.
 
 Earlier history is recorded in [changelog](changelog).
+
+
+### Standalone production hardening
+
+- Restore receiver health telemetry and USB reconnection counters.
+- Aggregate routine Phase C sample-processing diagnostics.
+- Use bounded deque storage for active Phase C captures.
+- Harden diagnostic persistence and graceful shutdown handling.
+- Report diagnostic write failures and dropped captures.
+- Expand Python compatibility testing to include Python 3.12.
+- Validate packaged driver modules, installer manifest and imports.

@@ -238,6 +238,7 @@ and saved atomically after synchronization anomalies. No raw IQ is saved.
     phase_c_before_seconds = 180
     phase_c_after_seconds = 60
     phase_c_max_events = 20000
+    phase_c_sample_summary_seconds = 1
     phase_c_max_pending = 8
     phase_c_max_files = 100
 ```
@@ -279,3 +280,43 @@ should be removed from existing configurations.
 Historical experiment data is not modified or deleted by this change.
 See the [development history](development-history.md) and the historical
 [A/B crossover procedure](ab-crossover-test.md) for background.
+
+
+### Standalone receiver health and diagnostic persistence
+
+Periodic RF health summaries include USB read mode, connection status,
+synchronization status, frequency-lock status, frequency offset,
+last accepted frame age and decoded-frame queue depth.
+
+The `usb_reconnections` counter records successful device reopenings
+after the initial connection. It is separate from
+`usb_stream_restarts`, which records stream restarts within a session.
+
+When Phase C diagnostics are enabled, routine sample-processing events
+are aggregated according to `phase_c_sample_summary_seconds`:
+
+- `1` (default): one-second sample-processing summaries.
+- `0`: individual sample-processing records.
+- Larger values: longer aggregation intervals.
+
+Processing errors and other RF diagnostic events remain individual
+records. Summaries retain sample counts, total sample bytes, latency
+totals and maximum latency and queue-depth measurements.
+
+Other diagnostic events can split aggregation intervals. The configured
+pre-trigger duration is a target, subject to the bounded event limit
+and actual receiver activity.
+
+Routine persistence writes at most one capture per persistence call.
+Graceful shutdown stops the radio and attempts to persist pending and
+active captures. Active captures finalized before their scheduled end
+are marked `incomplete`.
+
+Shutdown bypasses the normal retry delay, but evidence cannot be
+guaranteed to survive forced termination or unavailable storage.
+
+Periodic diagnostic summaries report capture write failures and
+dropped captures when the corresponding collectors are enabled.
+
+The shared capture storage budget and retention policies remain
+unchanged. Persistence remains synchronous on the consumer thread.
