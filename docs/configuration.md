@@ -118,8 +118,8 @@ The internal field name issWindGust10 refers to the configured wind transmitter,
 Disabled by default. This is a diagnostic recorder, **not** a wind filter:
 all gusts continue into WeeWX unchanged. Captures contain decoded eight-byte
 Davis payloads and receiver metadata, **not** raw SDR IQ samples. The feature
-uses a bounded in-memory history and retains at most the configured number of
-JSON files. Ensure the destination directory is writable and persistent.
+uses bounded history, capture duration, frame and event counts, and pending
+captures. Completed JSON files are written atomically and subject to retention limits. Ensure the destination directory is writable and persistent.
 
 ```ini
 [Rtldavis]
@@ -131,6 +131,10 @@ JSON files. Ensure the destination directory is writable and persistent.
     gust_capture_before_seconds = 300
     gust_capture_after_seconds = 60
     gust_diagnostics_max_files = 100
+    gust_capture_max_frames = 4096
+    gust_capture_max_events = 128
+    gust_capture_max_pending = 8
+    gust_capture_max_seconds = 180
 ```
 
 A type-9 frame at or above the absolute threshold triggers capture immediately.
@@ -141,6 +145,13 @@ before and after the trigger, subject to the configured window and the receiver
 actually receiving those frames. The capture file is finalized after the
 post-trigger window or when the driver closes normally. A diagnostic write
 failure is logged but does not affect weather readings.
+
+Overlapping triggers can extend an active capture up to the configured
+maximum post-trigger duration (at least the configured after-window).
+Frame and event limits discard oldest entries. Failed writes are queued
+for retry; a full pending queue discards its oldest capture. Unwritten
+memory evidence may be lost on restart. Fractional speeds are preserved
+in threshold comparisons.
 
 
 ## Optional RF frame diagnostics (experimental)
@@ -164,17 +175,24 @@ CRC failures or suppressed bursts. Do not compare these counts directly with
 Go decoder statistics. Reception percentages are unchanged.
 
 
-## Receiver burst counters (experimental)
+## Receiver diagnostic counters
 
-The receiver maintains in-memory `receiver.diagnostic_counts` for accepted
-frames and frames suppressed by its existing two-second burst guard. Suppressed
-frames are divided into byte-identical and different-payload categories relative
-to the last accepted frame for that transmitter. These counters do not affect
-packet delivery, reception statistics, or RF tuning. They are not yet exposed
-as WeeWX observations or periodic logs. CRC failures are not counted here:
-those are rejected earlier by the demodulator. No CRC instrumentation has been
-added yet.
+Receiver counters are independent of optional capture features and are
+included in periodic summaries when enabled.
 
+| Counter | Meaning |
+| --- | --- |
+| `accepted` | Accepted frames. |
+| `burst_suppressed` | Burst guard rejections. |
+| `burst_identical`, `burst_different` | Suppressed candidates classified by payload equality. |
+| `timing_early_suppressed` | Candidates rejected more than 300 ms before their predicted visit. |
+| `missed_predictions` | Missed expected frame visits. |
+| `sync_losses` | Synchronization or frequency-lock loss events. |
+| `sync_acquired` | Synchronization acquisitions. |
+
+The early guard is exempt during acquisition and reacquisition. Rejected
+candidates do not re-anchor the schedule or update learned offsets.
+The timing counter is initialized to zero; CRC counters are separate.
 
 ## Periodic RF diagnostic summaries
 
@@ -194,6 +212,7 @@ The first summary includes counts accumulated since the receiver started.
 
 The periodic summary also includes:
 
+- Early timing guard suppressions, including zero-count intervals.
 - Missed frame predictions, synchronization losses and acquisitions.
 - USB zero sample blocks and dropped sample blocks.
 - USB stream restarts and tuning errors.
@@ -206,6 +225,50 @@ elapsed acquisition and recovery durations when available.
 
 These diagnostics do not require an A/B experiment recorder. Periodic
 summaries are disabled by default.
+
+## Optional Phase C receiver evidence capture
+
+Disabled by default. Receiver event metadata is held in bounded memory
+and saved atomically after synchronization anomalies. No raw IQ is saved.
+
+```ini
+[Rtldavis]
+    phase_c_diagnostics_enabled = false
+    phase_c_diagnostics_path = /data/phase-c-diagnostics
+    phase_c_before_seconds = 180
+    phase_c_after_seconds = 60
+    phase_c_max_events = 20000
+    phase_c_max_pending = 8
+    phase_c_max_files = 100
+```
+
+Evidence includes candidate acceptance and rejection, early timing guard
+metadata, demodulation statistics, synchronization and hardware timing.
+The history duration is an upper bound: high event rates may exhaust the
+count limit sooner. Repeated triggers do not extend an active capture.
+Persistence runs on the WeeWX loop thread, not the RF producer.
+
+## Shared diagnostic storage retention
+
+```ini
+[Rtldavis]
+    diagnostic_storage_max_bytes = 52428800
+    diagnostic_cleanup_seconds = 300
+    diagnostic_write_retry_seconds = 30
+```
+
+The combined default budget is 50 MiB. Retention first enforces each
+collector's file-count limit, then removes oldest remaining captures by
+modification time until the combined budget is met. Cleanup runs at
+startup, after successful writes and periodically. Failed writes are
+retried after the configured delay.
+
+Only recognized completed capture filenames in enabled collectors are
+eligible. Unrelated files, symlink entries, historical A/B files and logs
+are excluded. Disabled collectors are not cleaned. This is a retention
+limit, not a hard filesystem quota: temporary files and writes may exceed
+it, and filesystem errors may prevent enforcement. Zero bytes retains no
+completed captures; an oversized capture may be removed immediately.
 
 ## Historical A/B diagnostics
 
