@@ -192,6 +192,7 @@ class Receiver:
         self.diagnostic_counts = {'burst_suppressed': 0,
                                   'burst_identical': 0,
                                   'burst_different': 0,
+                                  'timing_early_suppressed': 0,
                                   'accepted': 0}
         self._last_accepted_payload = {}
         self.phase_c_diagnostics = None
@@ -310,9 +311,17 @@ class Receiver:
                 while expected + RECEIVE_WINDOW < now:
                     expected += period
                 if now < expected - 0.300:
-                    self.diagnostic_counts["timing_early_suppressed"] = (
-                        self.diagnostic_counts.get("timing_early_suppressed", 0) + 1
-                    )
+                    self.diagnostic_counts["timing_early_suppressed"] += 1
+                    if self.phase_c_diagnostics is not None:
+                        self.phase_c_diagnostics.observe(
+                            "candidate_rejected", timestamp=now,
+                            reason="timing_early_suppressed",
+                            transmitter=transmitter + 1,
+                            rf_channel=channel,
+                            tuned_frequency_hz=frequency,
+                            frequency_error_hz=candidate.frequency_error,
+                            expected_visit_monotonic=expected,
+                            early_by_ms=round((expected - now) * 1000, 3))
                     log.warning(
                         "ignoring early candidate for channel %d: %.1f ms "
                         "before predicted visit (freq error %+.0f Hz)",
